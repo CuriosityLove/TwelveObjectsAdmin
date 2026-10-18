@@ -59,9 +59,10 @@
    "receivedDate": "2026-09-12",
    "sample": true,
    "sku": "TO-26-001",
-   "status": "In gallery",
+   "status": "On hold",
    "title": "Low Table in Travertine",
-   "year": "2025"
+   "year": "2025",
+   "holdInvoice": "inv-sample2"
   },
   {
    "id": "p-sample2",
@@ -98,7 +99,8 @@
    "soldDate": "2026-10-02",
    "status": "Sold",
    "title": "Pendant No. 3",
-   "year": "2026"
+   "year": "2026",
+   "invoiceId": "inv-sample1"
   },
   {
    "id": "p-sample3",
@@ -171,6 +173,89 @@
    "status": "Incoming",
    "title": "Stool Study in Cast Bronze",
    "year": "2026"
+  }
+ ],
+ "invoices": [
+  {
+   "id": "inv-sample1",
+   "sample": true,
+   "number": "TO-INV-2026-001",
+   "date": "2026-09-28",
+   "dueDate": "2026-10-12",
+   "sent": true,
+   "sentDate": "2026-09-28",
+   "client": {
+    "name": "Jordan Rivera (sample)",
+    "company": "",
+    "email": "jordan@example.com",
+    "phone": "",
+    "address": "1200 Example Drive\nLos Angeles, CA 90049"
+   },
+   "items": [
+    {
+     "pieceId": "p-sample2",
+     "title": "Pendant No. 3",
+     "artist": "Example Studio North",
+     "details": "2026, Blown glass, brass, 22 x 16 in, 1 of 8",
+     "sku": "TO-26-002",
+     "price": 7200
+    }
+   ],
+   "discount": 0,
+   "shipping": 0,
+   "taxRate": 9.75,
+   "taxExempt": false,
+   "taxNote": "",
+   "taxShipping": false,
+   "terms": "full",
+   "depositPct": 50,
+   "received": [
+    {
+     "id": "r1",
+     "amount": 7902,
+     "date": "2026-10-02",
+     "method": "Wire"
+    }
+   ],
+   "notes": "Thank you for collecting with Twelve Objects.",
+   "createdAt": "2026-09-28T10:00:00Z"
+  },
+  {
+   "id": "inv-sample2",
+   "sample": true,
+   "number": "TO-INV-2026-002",
+   "date": "2026-10-15",
+   "dueDate": "2026-10-29",
+   "sent": true,
+   "sentDate": "2026-10-15",
+   "client": {
+    "name": "Alex Chen (sample)",
+    "company": "Sample Interiors Studio",
+    "email": "alex@example.com",
+    "phone": "310.555.0100",
+    "address": "500 Sample Blvd, Suite 2\nSanta Monica, CA 90401"
+   },
+   "items": [
+    {
+     "pieceId": "p-sample1",
+     "title": "Low Table in Travertine",
+     "artist": "Example Studio North",
+     "details": "2025, Honed travertine, waxed oak, 14 x 48 x 30 in, Unique",
+     "sku": "TO-26-001",
+     "price": 18500
+    }
+   ],
+   "discount": 0,
+   "shipping": 650,
+   "taxRate": 9.75,
+   "taxExempt": true,
+   "taxNote": "Resale certificate on file",
+   "taxShipping": false,
+   "terms": "deposit",
+   "depositPct": 50,
+   "received": [],
+   "notes": "",
+   "createdAt": "2026-10-15T10:00:00Z"
   }
  ]
 }

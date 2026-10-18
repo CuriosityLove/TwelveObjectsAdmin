@@ -91,6 +91,7 @@ async function main() {
     } catch (e) { next(e); }
   });
 
+  app.get("/vendor/jspdf.umd.min.js", (req, res) => res.sendFile(require.resolve("jspdf/dist/jspdf.umd.min.js")));
   app.use(express.static(pub, { index: "index.html", maxAge: 0 }));
   app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: "server_error" }); });
 

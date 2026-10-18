@@ -279,6 +279,38 @@ label.f textarea { min-height: 84px; resize: vertical; }
 .form-acts { display: flex; gap: 10px; justify-content: space-between; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 8px; }
 .err { color: var(--red); font-size: 13px; }
 
+/* ---------- invoices ---------- */
+.iv-doc { border: 1px solid var(--line); background: var(--surface); padding: 22px 24px 18px; display: grid; gap: 18px; }
+.iv-top { display: flex; gap: 12px; align-items: baseline; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+.iv-top .x { font-weight: 300; letter-spacing: 0.32em; }
+.iv-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.iv-head h3 { margin: 0; font-size: 38px; line-height: 1; color: var(--green); font-weight: 400; }
+.iv-head dl { display: grid; grid-template-columns: auto auto; gap: 2px 14px; margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.iv-head dt { color: var(--soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding-top: 2px; }
+.iv-head dd { margin: 0; text-align: right; }
+.iv-parties { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; font-size: 13px; }
+.iv-parties .k { display: block; margin-bottom: 4px; }
+.iv-parties > div { min-width: 0; overflow-wrap: anywhere; }
+.iv-items { border-top: 1px solid var(--rule); }
+.iv-item { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.iv-th .ph .ini { padding: 4px; } .iv-th .glyph { font-size: 26px !important; } .iv-th .lbl { display: none; }
+.iv-sm { font-size: 12px; color: var(--soft); }
+.iv-totals, .iv-live { margin-left: auto; width: min(340px, 100%); display: grid; }
+.iv-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 13.5px; }
+.iv-row span:first-child { color: var(--soft); }
+.iv-row.big { border-top: 1px solid var(--rule); margin-top: 4px; padding-top: 9px; font-family: var(--serif); font-size: 20px; }
+.iv-row.big span:first-child { color: var(--ink); }
+.iv-row.due { background: var(--field); border-bottom: 1px solid var(--green); padding: 6px 8px; margin: 4px -8px 0; font-weight: 600; }
+.iv-row.due span:first-child { color: var(--ink); }
+.iv-foot { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; font-size: 12.5px; color: var(--soft); border-top: 1px solid var(--line); padding-top: 12px; }
+.iv-foot p { margin: 4px 0 0; }
+.iv-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding-top: 16px; }
+.iv-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px auto; gap: 12px; align-items: end; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.iv-live { border-top: 1px solid var(--rule); padding-top: 8px; margin-bottom: 8px; }
+.panel h2 + form { margin-top: 20px; }
+.chk-row { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink); padding-top: 18px; }
+@media (max-width: 640px) { .iv-parties, .iv-foot { grid-template-columns: minmax(0, 1fr); } .iv-doc { padding: 16px; } .iv-edit-row { grid-template-columns: minmax(0, 1fr) 110px auto; } }
+
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom, 0px) + 22px); background: var(--ink); color: var(--bg); padding: 9px 18px; border-radius: 999px; font-size: 13.5px; z-index: 30; max-width: calc(100% - 32px); }
 
 /* ---------- footer ---------- */
@@ -329,6 +361,7 @@ footer .wrap { padding-block: 0 28px; }
       <button type="button" data-go="overview">Overview</button>
       <button type="button" data-go="inventory">Inventory</button>
       <button type="button" data-go="artists">Artists</button>
+      <button type="button" data-go="invoices">Invoices</button>
     </nav>
     <button type="button" class="btn" id="addPieceTop" data-act="new-piece">Add piece</button>
     <form method="post" action="/auth/logout" class="who"><span id="who"></span><button type="submit" class="linkish">Sign out</button></form>
@@ -359,6 +392,7 @@ footer .wrap { padding-block: 0 28px; }
 <div id="panelRoot"></div>
 <div id="toastRoot"></div>
 
+<script src="/vendor/jspdf.umd.min.js"></script>
 <script src="/shim.js"></script>
 <script src="/app.js"></script>
 </body>

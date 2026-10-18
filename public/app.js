@@ -11,7 +11,8 @@
 
   const S = {
     db: null, assets: null, downloads: null, canWrite: true,
-    pieces: [], artists: [], loaded: { pieces: false, artists: false }, offline: false,
+    pieces: [], artists: [], invoices: [], settings: {}, loaded: { pieces: false, artists: false, invoices: false }, offline: false,
+    invDraft: null, invPayOpen: false,
     view: "overview",
     f: { q: "", cat: "All", status: "On hand", agreement: "All", sort: "recent" },
     layout: "grid",
@@ -74,6 +75,7 @@
       if (p.followUpDate && p.followUpDate <= horizon && !p.followUpDone) items.push({ kind: "follow", date: p.followUpDate, p });
       if (p.status === "Incoming" && p.expectedDate && p.expectedDate <= horizon) items.push({ kind: "arrive", date: p.expectedDate, p });
     }
+    for (const inv of openInvoices()) if (inv.dueDate && inv.dueDate <= horizon) items.push({ kind: "invoice", date: inv.dueDate, inv });
     return items.sort((a, b) => a.date.localeCompare(b.date));
   }
 
@@ -90,6 +92,13 @@
       S.pieces = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() }));
       S.loaded.pieces = true; render(); renderPanel(true);
     }, (e) => { toast("The inventory stopped syncing. Reload the page to reconnect."); });
+    db.collection("invoices").onSnapshot((snap) => {
+      S.invoices = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() }));
+      S.loaded.invoices = true; render(); renderPanel(true);
+    }, () => {});
+    db.collection("settings").onSnapshot((snap) => {
+      const g = snap.docs.find((d) => d.id === "gallery" && d.exists); S.settings = g ? g.data() : {};
+    }, () => {});
     db.collection("artists").onSnapshot((snap) => {
       S.artists = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
       S.loaded.artists = true; render(); renderPanel(true);
@@ -115,10 +124,10 @@
       m.innerHTML = `<div class="empty"><h2>Inventory <em class="s">offline</em></h2><div><p>The app can't reach the server right now. Check your connection and reload the page.</p></div></div>`;
       return;
     }
-    if (!S.loaded.pieces || !S.loaded.artists) return;
-    const sampleCount = S.pieces.filter((p) => p.sample).length + S.artists.filter((a) => a.sample).length;
-    const note = sampleCount && S.canWrite ? `<div class="notice"><span><b>Sample entries.</b> Pieces and artists marked Sample are examples to show how the inventory works.</span><button class="btn small ghost" data-act="clear-samples">Remove samples</button></div>` : "";
-    m.innerHTML = note + (S.view === "inventory" ? viewInventory() : S.view === "artists" ? viewArtists() : viewOverview());
+    if (!S.loaded.pieces || !S.loaded.artists || !S.loaded.invoices) return;
+    const sampleCount = S.pieces.filter((p) => p.sample).length + S.artists.filter((a) => a.sample).length + S.invoices.filter((i) => i.sample).length;
+    const note = sampleCount && S.canWrite ? `<div class="notice"><span><b>Sample entries.</b> Pieces, artists and invoices marked Sample are examples to show how the inventory works.</span><button class="btn small ghost" data-act="clear-samples">Remove samples</button></div>` : "";
+    m.innerHTML = note + (S.view === "inventory" ? viewInventory() : S.view === "artists" ? viewArtists() : S.view === "invoices" ? viewInvoices() : viewOverview());
   }
 
   function photoUrl(p, i = 0) { const ph = (p.photos || [])[i]; return ph ? "/_blob/" + ph : ""; }
@@ -158,7 +167,7 @@
     const recent = [...S.pieces].sort((a, b) => String(b.receivedDate || b.createdAt || "").localeCompare(String(a.receivedDate || a.createdAt || ""))).filter((p) => ON_HAND.includes(p.status)).slice(0, 6);
 
     return `
-      <div class="head"><h1>The <em class="s">collection</em> today</h1><p>${onHand.length} ${onHand.length === 1 ? "piece" : "pieces"} on hand from ${(() => { const k = new Set(onHand.map((p) => p.artistId)).size; return k + (k === 1 ? " artist" : " artists"); })()}. ${consign} on consignment, ${onHand.length - consign} owned outright${incoming ? ", " + incoming + " still incoming" : ""}.</p></div>
+      <div class="head"><h1>The <em class="s">collection</em> today</h1><p>${onHand.length} ${onHand.length === 1 ? "piece" : "pieces"} on hand from ${new Set(onHand.map((p) => p.artistId)).size} artists. ${consign} on consignment, ${onHand.length - consign} owned outright${incoming ? ", " + incoming + " still incoming" : ""}.</p></div>
       <div class="figures">
         <div><span class="k">On hand</span><div class="v num">${onHand.length}</div><div class="sub">pieces incoming, shown or on hold</div></div>
         <div><span class="k">Retail value</span><div class="v num">${usd(retail, { zero: 1 })}</div><div class="sub">list prices of pieces on hand</div></div>
@@ -175,6 +184,13 @@
 
   function agendaItem(it) {
     const d = parse(it.date), late = it.date < today();
+    if (it.kind === "invoice") {
+      const inv = it.inv, t = invTotals(inv);
+      return `<li class="${late ? "over-due" : ""}">
+        <div class="d"><b>${d.getDate()}</b><span>${MON[d.getMonth()]}</span></div>
+        <div class="what"><div><span class="tag ${late ? "late" : "arrive"}">Invoice</span><button class="t" data-open-invoice="${esc(inv.id)}">${esc(clientName(inv))}</button></div><div class="m">${esc(inv.number)} balance due · ${rel(it.date)}</div></div>
+        <div class="amt"><span class="num">${usd2(t.balance)}</span>${S.canWrite ? `<button class="btn small ghost" data-open-invoice="${esc(inv.id)}">Open</button>` : ""}</div></li>`;
+    }
     const p = it.p;
     let tag, line, amt = "";
     if (it.kind === "pay") {
@@ -305,11 +321,17 @@
     let html = "";
     if (P.type === "piece") {
       const p = P.id ? S.pieces.find((x) => x.id === P.id) : null;
-      if (P.id && !p) { closePanel(); return; }
+      if (P.id && !p) { if (Date.now() - (P.saved || 0) > 5000) closePanel(); return; }
       html = P.mode === "edit" ? pieceForm(p) : pieceDetail(p);
+    } else if (P.type === "invoice") {
+      const inv = P.id ? S.invoices.find((x) => x.id === P.id) : null;
+      if (P.id && !inv) { if (Date.now() - (P.saved || 0) > 5000) closePanel(); return; }
+      html = P.mode === "edit" ? invoiceForm(inv || P.seed) : invoiceDetail(inv);
+    } else if (P.type === "settings") {
+      html = settingsForm();
     } else {
       const a = P.id ? S.artists.find((x) => x.id === P.id) : null;
-      if (P.id && !a) { closePanel(); return; }
+      if (P.id && !a) { if (Date.now() - (P.saved || 0) > 5000) closePanel(); return; }
       html = P.mode === "edit" ? artistForm(a) : artistDetail(a);
     }
     const scroll = root.querySelector(".panel")?.scrollTop || 0;
@@ -365,6 +387,9 @@
         </div>
       </div>
       <div class="sec"><span class="k">Payments</span>${payRows}</div>
+      ${(() => { const iv = invoiceForPiece(p.id);
+        if (iv) return `<div class="sec"><span class="k">Invoice</span><div class="files-link"><div><div>${esc(iv.number)}, ${esc(clientName(iv))}</div><div class="u">${invStatus(iv)} · ${usd2(invTotals(iv).total)}</div></div><button class="btn small ghost" data-open-invoice="${esc(iv.id)}">Open invoice</button></div></div>`;
+        return S.canWrite && !["Sold", "Returned"].includes(p.status) ? `<div class="sec"><span class="k">Invoice</span><div class="files-link"><div>Selling this piece?</div><button class="btn small lime" data-act="new-invoice-for" data-piece="${esc(p.id)}">Create invoice</button></div></div>` : ""; })()}
       ${p.followUpDate && !p.followUpDone ? `<div class="sec"><span class="k">Next follow-up</span><div class="files-link"><div><div>${esc(p.followUpNote || "Follow up")}</div><div class="u">${fdate(p.followUpDate)} · ${rel(p.followUpDate)}</div></div>${S.canWrite ? `<button class="btn small ghost" data-follow-done="${esc(p.id)}">Done</button>` : ""}</div></div>` : ""}
       ${p.filesUrl || a?.filesUrl ? `<div class="sec"><span class="k">Files</span>${fileRow("Piece files", p.filesUrl)}${fileRow((a ? a.name : "Artist") + " folder", a?.filesUrl)}</div>` : ""}
       ${p.notes ? `<div class="sec"><span class="k">Notes</span><div class="notes">${esc(p.notes)}</div></div>` : ""}
@@ -557,7 +582,7 @@
     if (!old) data.createdAt = data.updatedAt;
     const id = P.id || "p-" + uid();
     const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
-    if (await write("pieces/" + id, clean(data), old ? "Saved" : "Piece added")) { S.panel = { type: "piece", id, mode: "view" }; renderPanel(); }
+    if (await write("pieces/" + id, clean(data), old ? "Saved" : "Piece added")) { S.panel = { type: "piece", id, mode: "view", saved: Date.now() }; renderPanel(); }
     else btn.disabled = false;
   }
 
@@ -569,7 +594,7 @@
     for (const k of ["name", "studio", "location", "agreement", "email", "phone", "website", "instagram", "filesUrl", "bio", "notes"]) data[k] = g(k);
     delete data.id; data.updatedAt = new Date().toISOString(); if (!old) data.createdAt = data.updatedAt;
     const id = P.id || "a-" + uid();
-    if (await write("artists/" + id, data, old ? "Saved" : "Artist added")) { S.panel = { type: "artist", id, mode: "view" }; renderPanel(); }
+    if (await write("artists/" + id, data, old ? "Saved" : "Artist added")) { S.panel = { type: "artist", id, mode: "view", saved: Date.now() }; renderPanel(); }
   }
 
   async function markPaid(pid, payId) {
@@ -607,18 +632,411 @@
     try {
       for (const p of ps) await S.db.doc("pieces/" + p.id).delete();
       for (const a of as) await S.db.doc("artists/" + a.id).delete();
+      for (const i of S.invoices.filter((x) => x.sample)) await S.db.doc("invoices/" + i.id).delete();
       toast("Samples removed");
     } catch (e) { toast("Couldn't remove the samples. Try again."); }
   }
 
+  // ---------- invoices ----------
+  const INV_DEFAULTS = {
+    taxRate: 9.75,
+    payment: "Payment by wire transfer or check payable to XIIO, LLC. Wire details are provided on request.",
+    terms: "Title passes to the buyer on receipt of full payment. Pieces are released for delivery once payment clears.",
+    dueDays: 14,
+  };
+  const setting = (k) => (has(S.settings[k]) ? S.settings[k] : INV_DEFAULTS[k]);
+  const usd2 = (v) => "$" + n(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const cents = (v) => Math.round(v * 100) / 100;
+
+  function invTotals(inv) {
+    const sub = cents((inv.items || []).reduce((s, i) => s + n(i.price), 0));
+    const disc = Math.min(sub, n(inv.discount));
+    const ship = n(inv.shipping);
+    const taxable = inv.taxExempt ? 0 : sub - disc + (inv.taxShipping ? ship : 0);
+    const tax = Math.round(taxable * n(inv.taxRate)) / 100;
+    const total = cents(sub - disc + ship + tax);
+    const paid = cents((inv.received || []).reduce((s, r) => s + n(r.amount), 0));
+    const deposit = inv.terms === "deposit" ? Math.round(total * n(inv.depositPct || 50)) / 100 : total;
+    return { sub, disc, ship, tax, total, paid, balance: Math.max(0, cents(total - paid)), deposit };
+  }
+  function invStatus(inv) {
+    const t = invTotals(inv);
+    if (inv.voided) return "Void";
+    if (t.total > 0 && t.paid >= t.total) return "Paid";
+    if (t.paid > 0) return "Partially paid";
+    return inv.sent ? "Sent" : "Draft";
+  }
+  const INV_CLS = { Draft: "st-hold", Sent: "st-incoming", "Partially paid": "st-incoming", Paid: "st-gallery", Void: "st-returned" };
+  const invPill = (inv) => { const s = invStatus(inv); return `<span class="pill ${INV_CLS[s]}">${esc(s)}</span>`; };
+  const clientName = (inv) => inv.client?.company || inv.client?.name || "No client";
+  const openInvoices = () => S.invoices.filter((i) => ["Sent", "Partially paid"].includes(invStatus(i)));
+  const invoiceForPiece = (pid) => S.invoices.find((i) => !i.voided && (i.items || []).some((x) => x.pieceId === pid));
+
+  function nextInvNumber() {
+    const yr = new Date().getFullYear();
+    const max = S.invoices.reduce((m, i) => { const k = new RegExp("TO-INV-" + yr + "-(\\d+)").exec(i.number || ""); return k ? Math.max(m, +k[1]) : m; }, 0);
+    return `TO-INV-${yr}-${String(max + 1).padStart(3, "0")}`;
+  }
+
+  function itemFromPiece(p) {
+    const details = [p.year, p.materials, p.dimensions, p.edition].filter(Boolean).join(", ");
+    return { pieceId: p.id, title: p.title || "Untitled", artist: artistName(p), details, sku: p.sku || "", price: n(p.price) };
+  }
+
+  function viewInvoices() {
+    const yr = String(new Date().getFullYear());
+    const list = [...S.invoices].sort((a, b) => String(b.number).localeCompare(String(a.number)));
+    const outstanding = openInvoices().reduce((s, i) => s + invTotals(i).balance, 0);
+    const paidYr = S.invoices.filter((i) => !i.voided).reduce((s, i) => s + (i.received || []).filter((r) => (r.date || "").startsWith(yr)).reduce((a, r) => a + n(r.amount), 0), 0);
+    const drafts = S.invoices.filter((i) => invStatus(i) === "Draft").length;
+    const rows = list.map((i) => {
+      const t = invTotals(i), st = invStatus(i), late = ["Sent", "Partially paid"].includes(st) && i.dueDate && i.dueDate < today();
+      return `<tr class="click" data-open-invoice="${esc(i.id)}" tabindex="0">
+        <td class="num">${esc(i.number)}</td><td><span class="tt">${esc(clientName(i))}</span>${i.sample ? `<span class="sample">Sample</span>` : ""}</td>
+        <td>${(i.items || []).map((x) => esc(x.title)).join(", ")}</td>
+        <td class="num">${fdate(i.date)}</td><td class="num" style="${late ? "color:var(--red)" : ""}">${["Sent", "Partially paid"].includes(st) ? fdate(i.dueDate) : ""}</td>
+        <td class="r">${usd2(t.total)}</td><td class="r" style="${t.balance && st !== "Void" && st !== "Draft" ? "color:var(--orange)" : ""}">${st === "Void" ? "" : usd2(t.balance)}</td><td>${invPill(i)}</td></tr>`;
+    }).join("");
+    return `
+      <div class="head"><h1><em class="s">Invoices</em></h1>
+        <div class="tools">${S.canWrite ? `<button class="btn ghost" data-act="inv-settings">Invoice settings</button><button class="btn" data-act="new-invoice">New invoice</button>` : ""}</div></div>
+      <div class="figures" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="owed"><span class="k">Outstanding</span><div class="v num">${usd(outstanding, { zero: 1 })}</div><div class="sub">${openInvoices().length} open ${openInvoices().length === 1 ? "invoice" : "invoices"}</div></div>
+        <div><span class="k">Received ${yr}</span><div class="v num">${usd(paidYr, { zero: 1 })}</div><div class="sub">payments recorded this year</div></div>
+        <div><span class="k">Drafts</span><div class="v num">${drafts}</div><div class="sub">not yet sent</div></div>
+      </div>
+      ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Number</th><th>Client</th><th>Pieces</th><th>Date</th><th>Due</th><th class="r">Total</th><th class="r">Balance</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-line">No invoices yet. Start one here, or from any piece with Create invoice.</div>`}`;
+  }
+
+  // ----- invoice detail: an on-screen copy of the document -----
+  function invoiceDoc(inv) {
+    const t = invTotals(inv), c = inv.client || {};
+    const line = (k, v, cls = "") => `<div class="iv-row ${cls}"><span>${k}</span><span class="num">${v}</span></div>`;
+    return `<div class="iv-doc">
+      <div class="iv-top"><span class="x">XIIO</span><span class="serif">Twelve Objects</span></div>
+      <div class="iv-head"><h3><em class="s">Invoice</em></h3><dl><dt>No.</dt><dd>${esc(inv.number)}</dd><dt>Date</dt><dd>${fdate(inv.date)}</dd><dt>Due</dt><dd>${fdate(inv.dueDate)}</dd></dl></div>
+      <div class="iv-parties"><div><span class="k">Billed to</span>${[c.name, c.company, ...(c.address || "").split("\n"), c.email, c.phone].filter(Boolean).map((x) => `<div>${esc(x)}</div>`).join("") || "<div>Client not set</div>"}</div>
+        <div><span class="k">From</span><div>XIIO, LLC, doing business as Twelve Objects</div><div>8906 Olympic Blvd</div><div>Beverly Hills, CA 90211</div><div>cs@twelveobjects.com · 424.279.5683</div></div></div>
+      <div class="iv-items">${(inv.items || []).map((x) => { const p = S.pieces.find((q) => q.id === x.pieceId);
+        return `<div class="iv-item">${p ? `<div class="iv-th">${tile(p)}</div>` : `<div></div>`}<div style="min-width:0"><div class="serif" style="font-size:16px">${esc(x.title)}</div><div class="iv-sm">${esc(x.artist)}</div><div class="iv-sm">${esc([x.details, x.sku].filter(Boolean).join(" · "))}</div></div><div class="num">${usd2(x.price)}</div></div>`; }).join("") || `<div class="empty-line">No pieces on this invoice.</div>`}</div>
+      <div class="iv-totals">
+        ${line("Subtotal", usd2(t.sub))}${t.disc ? line("Discount", "−" + usd2(t.disc)) : ""}${t.ship ? line("Shipping and crating", usd2(t.ship)) : ""}
+        ${inv.taxExempt ? line("Sales tax", "Exempt" + (inv.taxNote ? ", " + esc(inv.taxNote) : "")) : line(`Sales tax (${n(inv.taxRate)}%)`, usd2(t.tax))}
+        ${line("Total", usd2(t.total), "big")}${t.paid ? line("Paid to date", "−" + usd2(t.paid)) : ""}
+        ${inv.terms === "deposit" && !t.paid ? line(`Deposit due now (${n(inv.depositPct || 50)}%)`, usd2(t.deposit)) : ""}
+        ${line("Balance due", usd2(t.balance), "due")}
+      </div>
+      <div class="iv-foot"><div><span class="k">Payment</span><p>${esc(inv.paymentNote || setting("payment"))}</p></div><div><span class="k">Terms</span><p>${esc(inv.termsNote || setting("terms"))}</p>${inv.notes ? `<p>${esc(inv.notes)}</p>` : ""}</div></div>
+    </div>`;
+  }
+
+  function invoiceDetail(inv) {
+    const t = invTotals(inv), st = invStatus(inv);
+    const recv = (inv.received || []).map((r) => `<tr><td>${fdate(r.date)}</td><td>${esc(r.method || "")}</td><td class="r">${usd2(r.amount)}</td></tr>`).join("");
+    const payForm = S.invPayOpen ? `<form id="invPayForm" class="grid3" style="padding-top:12px" novalidate>
+        ${field("payAmount", "Amount received", inv.terms === "deposit" && !t.paid ? t.deposit : t.balance, { type: "number" })}
+        ${field("payDate", "Date", today(), { type: "date" })}
+        ${field("payMethod", "Method", "Wire", { options: ["Wire", "Check", "Card", "ACH", "Cash", "Other"] })}
+        <div class="full" style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn small ghost" data-act="inv-pay-cancel">Cancel</button><button type="submit" class="btn small">Save payment</button></div></form>` : "";
+    const can = S.canWrite && st !== "Void";
+    return `
+      <div class="bar"><span class="k">${esc(inv.number)} · ${invPill(inv)}</span>
+        <div class="acts">${can && st !== "Paid" ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small lime" data-act="inv-pdf">Download PDF</button><button class="btn small ghost" data-act="close">Close</button></div></div>
+      ${invoiceDoc(inv)}
+      ${can ? `<div class="iv-actions">
+        ${st === "Draft" ? `<button class="btn small" data-act="inv-sent">Mark as sent</button>` : ""}
+        ${st !== "Paid" ? `<button class="btn small ghost" data-act="inv-pay-open">Record payment</button>` : ""}
+        ${st !== "Paid" && t.balance > 0 ? `<button class="btn small ghost" data-act="inv-paid-full">Paid in full</button>` : ""}
+        ${st !== "Paid" ? (S.confirmDelete ? `<span class="err">Void this invoice and release its pieces?</span><button class="btn small danger" data-act="inv-void">Void</button><button class="btn small ghost" data-act="keep-inv">Keep</button>` : `<button class="btn small danger" data-act="inv-ask-void">Void</button>`) : ""}
+      </div>` : ""}
+      ${payForm}
+      ${recv ? `<div class="sec" style="margin-top:18px"><span class="k">Payments received</span><table class="pays">${recv}</table></div>` : ""}
+      ${st === "Paid" ? `<div class="hint">Paid in full. Its pieces are marked Sold, and payouts for consigned pieces are scheduled 30 days out.</div>` : ""}`;
+  }
+
+  // ----- invoice editor -----
+  function invoiceForm(inv) {
+    const isNew = !inv?.id;
+    inv = inv || {};
+    if (!S.invDraft) S.invDraft = (inv.items || []).map((x) => ({ ...x }));
+    const c = inv.client || {};
+    const clients = [...new Map(S.invoices.filter((i) => i.client?.name).map((i) => [i.client.name, i.client])).keys()];
+    const busy = new Set(S.invoices.filter((i) => !i.voided && i.id !== inv.id).flatMap((i) => (i.items || []).map((x) => x.pieceId)));
+    const avail = S.pieces.filter((p) => !["Sold", "Returned"].includes(p.status) && !busy.has(p.id) && !S.invDraft.some((x) => x.pieceId === p.id));
+    return `
+      <div class="bar"><span class="k">${isNew ? "New invoice" : "Editing " + esc(inv.number)}</span><div class="acts"><button class="btn small ghost" data-act="${isNew ? "close" : "cancel-edit"}">Cancel</button></div></div>
+      <h2>${isNew ? "New <em class='s'>invoice</em>" : esc(inv.number)}</h2>
+      <form id="invoiceForm" autocomplete="off" novalidate>
+        <div class="sec"><span class="k">Client</span><div class="grid2">
+          ${field("clientName", "Name", c.name, { list: "clientList", req: true })}
+          ${field("clientCompany", "Company", c.company)}
+          ${field("clientEmail", "Email", c.email, { type: "email" })}
+          ${field("clientPhone", "Phone", c.phone, { type: "tel" })}
+          ${field("clientAddress", "Billing and delivery address", c.address, { type: "textarea", full: true })}
+        </div><datalist id="clientList">${clients.map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+
+        <div class="sec"><span class="k">Pieces</span>
+          <div id="invItems">${invItemsHtml()}</div>
+          <div class="grid2" style="align-items:end">
+            <label class="f">Add a piece<select id="invAddPiece"><option value="">Choose from inventory</option>${avail.map((p) => `<option value="${esc(p.id)}">${esc(p.title)}, ${esc(artistName(p))}${has(p.price) ? ", " + usd(p.price) : ""}</option>`).join("")}</select></label>
+            <div><button type="button" class="btn small ghost" data-act="inv-add-piece">Add to invoice</button></div>
+          </div>
+        </div>
+
+        <div class="sec"><span class="k">Charges</span><div class="grid3">
+          ${field("discount", "Discount ($)", inv.discount, { type: "number" })}
+          ${field("shipping", "Shipping and crating", inv.shipping, { type: "number" })}
+          ${field("taxRate", "Sales tax %", has(inv.taxRate) ? inv.taxRate : setting("taxRate"), { type: "number" })}
+          <label class="chk-row"><input type="checkbox" id="f-taxExempt" name="taxExempt"${inv.taxExempt ? " checked" : ""}> Tax exempt</label>
+          ${field("taxNote", "Exemption reason", inv.taxNote, { ph: "Resale certificate, out-of-state delivery" })}
+          <label class="chk-row"><input type="checkbox" id="f-taxShipping" name="taxShipping"${inv.taxShipping ? " checked" : ""}> Tax shipping too</label>
+        </div></div>
+
+        <div class="sec"><span class="k">Dates and terms</span><div class="grid3">
+          ${field("number", "Invoice number", inv.number || nextInvNumber())}
+          ${field("date", "Invoice date", inv.date || today(), { type: "date" })}
+          ${field("dueDate", "Due date", inv.dueDate || addDays(today(), n(setting("dueDays"))), { type: "date" })}
+          ${field("terms", "Payment", inv.terms || "full", { options: [["full", "Paid in full"], ["deposit", "Deposit, then balance"]] })}
+          ${field("depositPct", "Deposit %", inv.depositPct ?? 50, { type: "number" })}
+        </div></div>
+
+        <div class="sec"><span class="k">Notes on the invoice</span><div class="grid2">
+          ${field("paymentNote", "Payment instructions", inv.paymentNote || setting("payment"), { type: "textarea", full: true })}
+          ${field("termsNote", "Terms", inv.termsNote || setting("terms"), { type: "textarea", full: true })}
+          ${field("notes", "Note to client (optional)", inv.notes, { type: "textarea", full: true })}
+        </div></div>
+
+        <div class="iv-live" id="invLive">${invLiveHtml(inv)}</div>
+
+        <div class="form-acts">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${!isNew && invStatus(inv) === "Draft" ? (S.confirmDelete ? `<span class="err">Delete this draft?</span><button type="button" class="btn small danger" data-act="inv-delete">Delete</button><button type="button" class="btn small ghost" data-act="keep-inv">Keep</button>` : `<button type="button" class="btn small danger" data-act="inv-ask-delete">Delete draft</button>`) : ""}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="err" id="formErr"></span><button type="submit" class="btn">${isNew ? "Create invoice" : "Save invoice"}</button></div>
+        </div>
+      </form>`;
+  }
+  function invItemsHtml() {
+    if (!S.invDraft.length) return `<div class="empty-line" style="padding:12px 0">No pieces yet. Add one below.</div>`;
+    return S.invDraft.map((x, k) => `<div class="iv-edit-row"><div style="min-width:0"><div class="serif" style="font-size:15px">${esc(x.title)}</div><div class="iv-sm">${esc(x.artist)}${x.sku ? " · " + esc(x.sku) : ""}</div></div>
+      <label class="f">Price<input type="number" step="any" inputmode="decimal" data-inv-price="${k}" value="${esc(x.price)}"></label>
+      <button type="button" class="x" data-inv-rm="${k}" aria-label="Remove ${esc(x.title)}">×</button></div>`).join("");
+  }
+  function readInvForm(form) {
+    const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
+    return {
+      client: { name: g("clientName"), company: g("clientCompany"), email: g("clientEmail"), phone: g("clientPhone"), address: g("clientAddress") },
+      items: S.invDraft.map((x) => ({ ...x, price: n(x.price) })),
+      discount: n(g("discount")), shipping: n(g("shipping")), taxRate: n(g("taxRate")),
+      taxExempt: fd.get("taxExempt") === "on", taxNote: g("taxNote"), taxShipping: fd.get("taxShipping") === "on",
+      number: g("number"), date: g("date"), dueDate: g("dueDate"), terms: g("terms"), depositPct: n(g("depositPct")) || 50,
+      paymentNote: g("paymentNote"), termsNote: g("termsNote"), notes: g("notes"),
+    };
+  }
+  function invLiveHtml(inv) {
+    const t = invTotals(inv);
+    return `<div class="iv-row"><span>Subtotal</span><span class="num">${usd2(t.sub)}</span></div>
+      ${t.disc ? `<div class="iv-row"><span>Discount</span><span class="num">−${usd2(t.disc)}</span></div>` : ""}
+      ${t.ship ? `<div class="iv-row"><span>Shipping and crating</span><span class="num">${usd2(t.ship)}</span></div>` : ""}
+      <div class="iv-row"><span>Sales tax${inv.taxExempt ? ", exempt" : ` (${n(inv.taxRate)}%)`}</span><span class="num">${usd2(t.tax)}</span></div>
+      <div class="iv-row big"><span>Total</span><span class="num">${usd2(t.total)}</span></div>
+      ${inv.terms === "deposit" ? `<div class="iv-row"><span>Deposit (${n(inv.depositPct || 50)}%)</span><span class="num">${usd2(t.deposit)}</span></div>` : ""}`;
+  }
+  function refreshInvLive() { const f = $("#invoiceForm"); if (f) $("#invLive").innerHTML = invLiveHtml(readInvForm(f)); }
+
+  async function saveInvoice(form) {
+    const P = S.panel, old = P.id ? S.invoices.find((x) => x.id === P.id) : null;
+    const data = readInvForm(form);
+    if (!data.client.name) { $("#formErr").textContent = "Add the client's name."; $("#f-clientName").focus(); return; }
+    if (!data.items.length) { $("#formErr").textContent = "Add at least one piece."; return; }
+    const full = { ...(old || {}), ...data, updatedAt: new Date().toISOString() };
+    delete full.id;
+    if (!old) { full.createdAt = full.updatedAt; full.received = []; full.sent = false; }
+    const id = P.id || "inv-" + uid();
+    const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
+    if (await write("invoices/" + id, clean(full), old ? "Invoice saved" : "Invoice created")) {
+      S.invDraft = null; S.panel = { type: "invoice", id, mode: "view", saved: Date.now() }; renderPanel();
+      if (full.sent) await holdPieces({ ...full, id });
+    } else btn.disabled = false;
+  }
+
+  async function savePiece2(p) { const d = { ...p, updatedAt: new Date().toISOString() }; delete d.id; return write("pieces/" + p.id, clean(d)); }
+
+  // Sent: reserve the pieces. Void: release them.
+  async function holdPieces(inv) {
+    for (const x of inv.items || []) {
+      const p = S.pieces.find((q) => q.id === x.pieceId);
+      if (p && p.status === "In gallery") await savePiece2({ ...p, status: "On hold", holdInvoice: inv.id });
+    }
+  }
+  async function releasePieces(inv) {
+    for (const x of inv.items || []) {
+      const p = S.pieces.find((q) => q.id === x.pieceId);
+      if (p && p.status === "On hold" && p.holdInvoice === inv.id) await savePiece2({ ...p, status: "In gallery", holdInvoice: "" });
+    }
+  }
+  // Paid in full: each piece is sold at its share of the invoice (after discount), and consigned pieces get their artist payout.
+  async function completeSale(inv) {
+    const t = invTotals(inv), soldDate = (inv.received || []).map((r) => r.date).sort().pop() || today();
+    for (const x of inv.items || []) {
+      const p = S.pieces.find((q) => q.id === x.pieceId);
+      if (!p || p.status === "Sold") continue;
+      const sale = cents(n(x.price) - (t.sub ? t.disc * n(x.price) / t.sub : 0));
+      const next = { ...p, status: "Sold", salePrice: sale, soldDate, buyer: inv.client?.company || inv.client?.name || "", invoiceId: inv.id, holdInvoice: "" };
+      if (next.agreement !== "Acquisition" && !(next.payments || []).some((y) => y.auto === "payout")) {
+        const split = has(next.artistSplit) ? n(next.artistSplit) : 50;
+        next.payments = [...(next.payments || []), { id: uid(), auto: "payout", label: `Artist payout, ${split}% of sale`, amount: calc(next).artistShare, due: addDays(soldDate, 30), paid: false, paidDate: "" }];
+      }
+      await savePiece2(next);
+    }
+  }
+
+  async function invUpdate(inv, patch, msg) {
+    const next = { ...inv, ...patch, updatedAt: new Date().toISOString() }; delete next.id;
+    const ok = await write("invoices/" + inv.id, clean(next), msg);
+    return ok ? { ...next, id: inv.id } : null;
+  }
+  async function recordPayment(inv, amount, date, method) {
+    if (!(amount > 0)) { toast("Enter the amount received."); return; }
+    const before = invStatus(inv);
+    const next = await invUpdate(inv, { sent: true, received: [...(inv.received || []), { id: uid(), amount: cents(amount), date, method }] }, "Payment recorded");
+    if (!next) return;
+    S.invPayOpen = false;
+    if (before === "Draft") await holdPieces(next);
+    if (invStatus(next) === "Paid") { await completeSale(next); toast("Paid in full. Pieces marked sold."); }
+    renderPanel();
+  }
+
+  function settingsForm() {
+    return `
+      <div class="bar"><span class="k">Invoice settings</span><div class="acts"><button class="btn small ghost" data-act="close">Cancel</button></div></div>
+      <h2>Invoice <em class="s">settings</em></h2>
+      <form id="settingsForm" novalidate><div class="sec"><span class="k">Defaults for new invoices</span><div class="grid2">
+        ${field("taxRate", "Sales tax %", setting("taxRate"), { type: "number" })}
+        ${field("dueDays", "Days until due", setting("dueDays"), { type: "number" })}
+        ${field("payment", "Payment instructions", setting("payment"), { type: "textarea", full: true })}
+        ${field("terms", "Terms", setting("terms"), { type: "textarea", full: true })}
+      </div><div class="hint">Confirm the sales tax rate with your accountant. Existing invoices keep the rate they were made with.</div></div>
+      <div class="form-acts"><span></span><button type="submit" class="btn">Save settings</button></div></form>`;
+  }
+  async function saveSettings(form) {
+    const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
+    const data = { ...S.settings, taxRate: n(g("taxRate")), dueDays: n(g("dueDays")) || 14, payment: g("payment"), terms: g("terms") };
+    if (await write("settings/gallery", data, "Settings saved")) closePanel();
+  }
+
+  // ----- PDF -----
+  async function thumbData(id) {
+    try {
+      const r = await fetch("/_blob/" + id); if (!r.ok) return null;
+      const bmp = await createImageBitmap(await r.blob());
+      const k = Math.min(1, 360 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(bmp, 0, 0, c.width, c.height);
+      return { url: c.toDataURL("image/jpeg", 0.85), w: c.width, h: c.height };
+    } catch (e) { return null; }
+  }
+
+  async function invoicePdf(inv) {
+    if (!window.jspdf) { toast("The PDF maker didn't load. Check your connection and try again."); return; }
+    const d = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+    const L = 54, R = 558, INK = [22, 22, 22], SOFT = [95, 95, 88], GREEN = [23, 137, 63], LIME = [221, 231, 138], LINE = [226, 226, 218];
+    const t = invTotals(inv), c = inv.client || {}, st = invStatus(inv);
+    const txt = (s, x, y, o = {}) => { d.setFont(o.font || "helvetica", o.style || "normal"); d.setFontSize(o.size || 9.5); d.setTextColor(...(o.color || INK)); d.text(String(s), x, y, o.align ? { align: o.align } : undefined); };
+    const rule = (y, color = INK, w = 0.75) => { d.setDrawColor(...color); d.setLineWidth(w); d.line(L, y, R, y); };
+    const masthead = () => {
+      d.setCharSpace(5); txt("XIIO", L, 52, { size: 14 }); d.setCharSpace(0);
+      txt("Twelve Objects", L + 72, 52, { font: "times", size: 11.5 });
+      txt("Collectible Design  ·  Art + Objects", R, 52, { size: 8, color: SOFT, align: "right" });
+      rule(62);
+    };
+    const footer = (i, total) => {
+      rule(742);
+      txt("XIIO, LLC dba Twelve Objects", L, 756, { size: 7.5 });
+      txt("8906 Olympic Blvd, Beverly Hills, CA 90211", L + 150, 756, { size: 7.5, color: SOFT });
+      const right = "cs@twelveobjects.com  ·  twelveobjects.com";
+      txt(total > 1 ? `${right}  ·  ${i} of ${total}` : right, R, 756, { size: 7.5, color: SOFT, align: "right" });
+    };
+    masthead();
+    txt("Invoice", L, 120, { font: "times", style: "italic", size: 40, color: GREEN });
+    const meta = [["Invoice no.", inv.number], ["Date", fdate(inv.date)], ["Due", fdate(inv.dueDate)]];
+    meta.forEach(([k, v], i) => { txt(k.toUpperCase(), 400, 92 + i * 16, { size: 7, color: SOFT }); txt(v, R, 92 + i * 16, { size: 9.5, align: "right" }); });
+    if (st === "Paid" || st === "Void") { d.setFillColor(...(st === "Paid" ? LIME : [247, 205, 210])); d.rect(L + 160, 96, 64, 22, "F"); txt(st.toUpperCase(), L + 192, 111, { size: 10, style: "bold", align: "center", color: st === "Paid" ? GREEN : [216, 27, 55] }); }
+
+    let y = 160;
+    txt("BILLED TO", L, y, { size: 7, color: SOFT }); txt("FROM", 320, y, { size: 7, color: SOFT });
+    const billed = [c.name, c.company, ...(c.address || "").split("\n"), c.email, c.phone].filter(Boolean);
+    const from = ["XIIO, LLC, doing business as Twelve Objects", "8906 Olympic Blvd", "Beverly Hills, CA 90211", "cs@twelveobjects.com", "424.279.5683"];
+    billed.forEach((s, i) => txt(s, L, y + 15 + i * 13, { size: 9.5, style: i === 0 ? "bold" : "normal" }));
+    from.forEach((s, i) => txt(s, 320, y + 15 + i * 13, { size: 9.5, color: i ? SOFT : INK }));
+    y += 22 + Math.max(billed.length, from.length) * 13 + 10;
+
+    const tableHead = () => { rule(y); txt("PIECE", L, y + 14, { size: 7, color: SOFT }); txt("AMOUNT", R, y + 14, { size: 7, color: SOFT, align: "right" }); y += 24; };
+    tableHead();
+    const pages = [1];
+    for (const x of inv.items || []) {
+      const p = S.pieces.find((q) => q.id === x.pieceId);
+      const img = p && (p.photos || [])[0] ? await thumbData(p.photos[0]) : null;
+      const tx = img ? L + 62 : L;
+      const det = d.setFont("helvetica", "normal").setFontSize(8.5).splitTextToSize([x.details, x.sku].filter(Boolean).join("  ·  "), 330);
+      const h = Math.max(img ? 66 : 0, 34 + det.length * 11);
+      if (y + h > 700) { d.addPage(); masthead(); y = 90; tableHead(); }
+      if (img) { const k = Math.min(52 / img.w, 64 / img.h); d.addImage(img.url, "JPEG", L, y - 2, img.w * k, img.h * k); }
+      txt(x.title, tx, y + 10, { font: "times", size: 13 });
+      txt(x.artist, tx, y + 24, { size: 9, color: SOFT });
+      d.setTextColor(...SOFT); d.text(det, tx, y + 36);
+      txt(usd2(x.price), R, y + 10, { size: 10, align: "right" });
+      y += h; rule(y - 6, LINE, 0.5);
+    }
+
+    const rows = [["Subtotal", usd2(t.sub)]];
+    if (t.disc) rows.push(["Discount", "-" + usd2(t.disc)]);
+    if (t.ship) rows.push(["Shipping and crating", usd2(t.ship)]);
+    rows.push(inv.taxExempt ? ["Sales tax", "Exempt" + (inv.taxNote ? ", " + inv.taxNote : "")] : [`Sales tax (${n(inv.taxRate)}%)`, usd2(t.tax)]);
+    const after = [];
+    if (t.paid) after.push(["Paid to date", "-" + usd2(t.paid)]);
+    if (inv.terms === "deposit" && !t.paid) after.push([`Deposit due now (${n(inv.depositPct || 50)}%)`, usd2(t.deposit)]);
+    const need = (rows.length + after.length) * 17 + 70 + 120;
+    if (y + need > 720) { d.addPage(); masthead(); y = 90; }
+    y += 8;
+    const TX = 340;
+    rows.forEach(([k, v]) => { txt(k, TX, y, { size: 9.5, color: SOFT }); txt(v, R, y, { size: 9.5, align: "right" }); y += 17; });
+    d.setDrawColor(...INK); d.setLineWidth(0.75); d.line(TX, y - 8, R, y - 8);
+    txt("Total", TX, y + 8, { font: "times", size: 15 }); txt(usd2(t.total), R, y + 8, { font: "times", size: 15, align: "right" }); y += 26;
+    after.forEach(([k, v]) => { txt(k, TX, y, { size: 9.5, color: SOFT }); txt(v, R, y, { size: 9.5, align: "right" }); y += 17; });
+    d.setFillColor(...LIME); d.rect(TX - 6, y - 12, R - TX + 12, 20, "F");
+    txt("Balance due", TX, y + 2, { size: 10, style: "bold" }); txt(usd2(t.balance), R, y + 2, { size: 10, style: "bold", align: "right" });
+    y += 36;
+
+    const block = (label, body) => {
+      if (!body) return;
+      const lines = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize(body, R - L);
+      if (y + 16 + lines.length * 12 > 730) { d.addPage(); masthead(); y = 90; }
+      rule(y, LINE, 0.5); txt(label.toUpperCase(), L, y + 14, { size: 7, color: SOFT });
+      d.setTextColor(...INK); d.text(lines, L, y + 28); y += 36 + lines.length * 12;
+    };
+    block("Payment", inv.paymentNote || setting("payment"));
+    block("Terms", inv.termsNote || setting("terms"));
+    block("Note", inv.notes);
+
+    const total = d.getNumberOfPages();
+    for (let i = 1; i <= total; i++) { d.setPage(i); footer(i, total); }
+    const name = `${inv.number}_${(clientName(inv)).replace(/[^A-Za-z0-9]+/g, "-")}.pdf`;
+    const blob = d.output("blob");
+    if (!S.downloads) { toast("Downloads aren't available in this view."); return; }
+    try { await S.downloads.save({ filename: name, data: blob }); }
+    catch (e) { if (e && e.code !== "cancelled") toast("The PDF didn't save."); }
+  }
+
   // ---------- events ----------
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
+    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-open-invoice],[data-inv-rm],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
     if (!t) return;
     const d = t.dataset;
     if (d.go) { e.preventDefault(); S.view = d.go; closePanel(); render(); window.scrollTo(0, 0); return; }
     if (d.openPiece) { e.stopPropagation(); return openPanel("piece", d.openPiece); }
     if (d.openArtist) return openPanel("artist", d.openArtist);
+    if (d.openInvoice) { e.stopPropagation(); S.invPayOpen = false; return openPanel("invoice", d.openInvoice); }
+    if (d.invRm) { S.invDraft.splice(+d.invRm, 1); return rerenderInvForm(); }
     if (d.cat) { S.f.cat = d.cat; return render(); }
     if (d.layout) { S.layout = d.layout; try { localStorage.setItem("to-layout", d.layout); } catch (x) {} return render(); }
     if (d.markPaid) { const [pid, pay] = d.markPaid.split("|"); t.disabled = true; return markPaid(pid, pay); }
@@ -630,8 +1048,8 @@
       case "new-piece": return openPanel("piece", null, "edit");
       case "new-artist": return openPanel("artist", null, "edit");
       case "new-piece-for": openPanel("piece", null, "edit"); $("#f-artistId").value = d.artist; return;
-      case "edit": S.panel.mode = "edit"; S.confirmDelete = false; return renderPanel();
-      case "cancel-edit": S.panel.mode = "view"; return renderPanel();
+      case "edit": S.panel.mode = "edit"; S.confirmDelete = false; S.invDraft = null; return renderPanel();
+      case "cancel-edit": S.panel.mode = "view"; S.invDraft = null; return renderPanel();
       case "ask-delete": S.confirmDelete = true; return rerenderActs();
       case "keep": S.confirmDelete = false; return rerenderActs();
       case "delete-piece": try { await S.db.doc("pieces/" + S.panel.id).delete(); toast("Piece deleted"); closePanel(); } catch (x) { toast("Couldn't delete. Try again."); } return;
@@ -649,9 +1067,31 @@
         $("#formErr").textContent = ""; return;
       }
       case "export": return exportCsv();
+      case "new-invoice": S.invDraft = null; return openPanel("invoice", null, "edit");
+      case "new-invoice-for": { const p = S.pieces.find((x) => x.id === d.piece); S.invDraft = p ? [itemFromPiece(p)] : null; S.panel = { type: "invoice", id: null, mode: "edit" }; S.confirmDelete = false; return renderPanel(); }
+      case "inv-add-piece": { const v = $("#invAddPiece").value, p = S.pieces.find((x) => x.id === v); if (!p) { $("#formErr").textContent = "Choose a piece first."; return; } S.invDraft.push(itemFromPiece(p)); return rerenderInvForm(); }
+      case "inv-settings": S.panel = { type: "settings", mode: "edit" }; return renderPanel();
+      case "inv-pdf": { const inv = S.invoices.find((x) => x.id === S.panel.id); t.disabled = true; await invoicePdf(inv); t.disabled = false; return; }
+      case "inv-sent": { const inv = S.invoices.find((x) => x.id === S.panel.id); const nx = await invUpdate(inv, { sent: true, sentDate: today() }, "Marked as sent"); if (nx) await holdPieces(nx); return; }
+      case "inv-pay-open": S.invPayOpen = true; return renderPanel();
+      case "inv-pay-cancel": S.invPayOpen = false; return renderPanel();
+      case "inv-paid-full": { const inv = S.invoices.find((x) => x.id === S.panel.id); t.disabled = true; return recordPayment(inv, invTotals(inv).balance, today(), "Wire"); }
+      case "inv-ask-void": case "inv-ask-delete": S.confirmDelete = true; return S.panel.mode === "edit" ? rerenderInvForm() : renderPanel();
+      case "keep-inv": S.confirmDelete = false; return S.panel.mode === "edit" ? rerenderInvForm() : renderPanel();
+      case "inv-void": { const inv = S.invoices.find((x) => x.id === S.panel.id); S.confirmDelete = false; const nx = await invUpdate(inv, { voided: true }, "Invoice voided"); if (nx) await releasePieces(nx); return; }
+      case "inv-delete": { const id = S.panel.id; try { await S.db.doc("invoices/" + id).delete(); S.invDraft = null; toast("Draft deleted"); closePanel(); } catch (x) { toast("Couldn't delete. Try again."); } return; }
       case "clear-samples": t.disabled = true; return clearSamples();
     }
   });
+  function rerenderInvForm() {
+    // keep typed values while the item list or delete prompt changes
+    const f = $("#invoiceForm"); if (!f) return;
+    const snapshot = { ...readInvForm(f), id: S.panel.id };
+    const old = S.panel.id ? S.invoices.find((x) => x.id === S.panel.id) : null;
+    const panel = $("#panelRoot .panel"), top = panel.scrollTop;
+    panel.innerHTML = invoiceForm({ ...(old || {}), ...snapshot, id: S.panel.id || undefined });
+    panel.scrollTop = top; refreshInvLive();
+  }
   function rerenderActs() {
     // keep typed values: rebuild only the delete area
     const form = $("#pieceForm") || $("#artistForm"); if (!form) return;
@@ -669,25 +1109,32 @@
     e.preventDefault();
     if (e.target.id === "pieceForm") savePiece(e.target);
     if (e.target.id === "artistForm") saveArtist(e.target);
+    if (e.target.id === "invoiceForm") saveInvoice(e.target);
+    if (e.target.id === "settingsForm") saveSettings(e.target);
+    if (e.target.id === "invPayForm") { const f = e.target.elements; recordPayment(S.invoices.find((x) => x.id === S.panel.id), n(f.payAmount.value), f.payDate.value || today(), f.payMethod.value); }
   });
   document.addEventListener("change", (e) => {
     const t = e.target;
     if (t.id === "fStatus") { S.f.status = t.value; render(); }
     if (t.id === "fAgreement") { S.f.agreement = t.value; render(); }
     if (t.id === "fSort") { S.f.sort = t.value; render(); }
+    if (t.closest && t.closest("#invoiceForm")) refreshInvLive();
+    if (t.id === "f-clientName") { const prev = S.invoices.find((i) => i.client?.name === t.value); if (prev) { const f = $("#invoiceForm").elements; for (const [k, v] of [["clientCompany", "company"], ["clientEmail", "email"], ["clientPhone", "phone"], ["clientAddress", "address"]]) if (!f[k].value) f[k].value = prev.client[v] || ""; } }
     if (t.id === "photoInput") uploadPhotos([...t.files]);
     if (t.id === "f-artistId") { $("#newArtistWrap").hidden = t.value !== "__new"; if (t.value !== "__new") { const a = S.artists.find((x) => x.id === t.value); if (a && (a.agreement === "Consignment" || a.agreement === "Acquisition") && $("#pieceForm") && !S.panel.id) $("#f-agreement").value = a.agreement; } }
     if (t.name === "pp") { const h = t.closest(".pay-row").querySelector('[name="ppd"]'); h.value = t.checked ? today() : ""; }
   });
   let qt;
   document.addEventListener("input", (e) => {
+    if (e.target.dataset && e.target.dataset.invPrice !== undefined) S.invDraft[+e.target.dataset.invPrice].price = n(e.target.value);
+    if (e.target.closest && e.target.closest("#invoiceForm")) refreshInvLive();
     if (e.target.id === "q") {
       clearTimeout(qt);
       qt = setTimeout(() => { S.f.q = e.target.value; const pos = e.target.selectionStart; render(); const q = $("#q"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }, 160);
     }
   });
 
-  if (/^#(inventory|artists|overview)$/.test(location.hash)) S.view = location.hash.slice(1);
+  if (/^#(inventory|artists|invoices|overview)$/.test(location.hash)) S.view = location.hash.slice(1);
   render();
   boot();
 })();

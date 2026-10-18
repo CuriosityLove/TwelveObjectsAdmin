@@ -37,8 +37,8 @@
     const [col, id] = path.split("/");
     return {
       id, path,
-      set: async (data) => { await call("PUT", `/api/${col}/${encodeURIComponent(id)}`, JSON.stringify(data), { "Content-Type": "application/json" }); refresh(col); },
-      delete: async () => { await call("DELETE", `/api/${col}/${encodeURIComponent(id)}`); refresh(col); },
+      set: async (data) => { await call("PUT", `/api/${col}/${encodeURIComponent(id)}`, JSON.stringify(data), { "Content-Type": "application/json" }); await refresh(col); },
+      delete: async () => { await call("DELETE", `/api/${col}/${encodeURIComponent(id)}`); await refresh(col); },
     };
   };
   const db = {
