@@ -11,7 +11,7 @@
 
   const S = {
     db: null, assets: null, downloads: null, canWrite: true,
-    pieces: [], artists: [], invoices: [], clients: [], settings: {}, loaded: { pieces: false, artists: false, invoices: false, clients: false }, offline: false, clientQ: "",
+    pieces: [], artists: [], invoices: [], clients: [], settings: {}, loaded: { pieces: false, artists: false, invoices: false, clients: false }, offline: false, clientQ: "", invTab: "invoices", outFormOpen: false,
     invDraft: null, invPayOpen: false,
     view: "overview",
     f: { q: "", cat: "All", status: "On hand", agreement: "All", sort: "recent" },
@@ -34,6 +34,7 @@
   const today = () => iso(new Date());
   const parse = (s) => { if (!s) return null; const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
   const addDays = (s, k) => { const d = parse(s); d.setDate(d.getDate() + k); return iso(d); };
+  const addMonths = (s, k) => { const d = parse(s); d.setMonth(d.getMonth() + k); return iso(d); };
   const daysFrom = (s) => Math.round((parse(s) - parse(today())) / 86400000);
   const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const fdate = (s) => { if (!s) return ""; const d = parse(s); return MON[d.getMonth()] + " " + d.getDate() + ", " + d.getFullYear(); };
@@ -74,6 +75,8 @@
       for (const pay of unpaid(p)) if (pay.due && pay.due <= horizon) items.push({ kind: "pay", date: pay.due, p, pay });
       if (p.followUpDate && p.followUpDate <= horizon && !p.followUpDone) items.push({ kind: "follow", date: p.followUpDate, p });
       if (p.status === "Incoming" && p.expectedDate && p.expectedDate <= horizon) items.push({ kind: "arrive", date: p.expectedDate, p });
+      if (ON_HAND.includes(p.status) && p.agreement !== "Acquisition" && p.consignEnd && p.consignEnd <= horizon) items.push({ kind: "consign", date: p.consignEnd, p });
+      if (isOut(p) && p.out.due && p.out.due <= horizon) items.push({ kind: "out", date: p.out.due, p });
     }
     for (const inv of openInvoices()) if (inv.dueDate && inv.dueDate <= horizon) items.push({ kind: "invoice", date: inv.dueDate, inv });
     return items.sort((a, b) => a.date.localeCompare(b.date));
@@ -145,7 +148,7 @@
   function card(p) {
     const price = p.status === "Sold" && has(p.salePrice) ? "Sold " + usd(p.salePrice) : has(p.price) ? usd(p.price) : "Price on request";
     return `<button class="card" data-open-piece="${esc(p.id)}">
-      <div style="position:relative">${tile(p)}<span class="pill-wrap" style="position:absolute;top:9px;right:9px">${pill(p.status)}</span></div>
+      <div style="position:relative">${tile(p)}<span class="pill-wrap" style="position:absolute;top:9px;right:9px">${isOut(p) ? `<span class="pill st-out">${esc(p.out.type)}</span>` : pill(p.status)}</span></div>
       <div class="t">${esc(p.title || "Untitled")}${sampleTag(p)}</div>
       <div class="a">${esc(artistName(p))}${p.year ? ", " + esc(p.year) : ""}</div>
       <div class="row"><span>${esc(p.category || "Uncategorized")}</span><span>${esc(price)}</span></div>
@@ -205,6 +208,12 @@
       tag = late ? `<span class="tag late">Follow up</span>` : `<span class="tag follow">Follow up</span>`;
       line = esc(p.followUpNote || "Follow up with " + artistName(p));
       amt = S.canWrite ? `<button class="btn small ghost" data-follow-done="${esc(p.id)}">Done</button>` : "";
+    } else if (it.kind === "consign") {
+      tag = `<span class="tag ${late ? "late" : "follow"}">Consignment ends</span>`;
+      line = `Renew with ${esc(artistName(p))} or return the piece`;
+    } else if (it.kind === "out") {
+      tag = `<span class="tag ${late ? "late" : "arrive"}">Due back</span>`;
+      line = `${esc(p.out.type)} with ${esc(p.out.with)}`;
     } else {
       tag = late ? `<span class="tag late">Arrival</span>` : `<span class="tag arrive">Arriving</span>`;
       line = `Expected from ${esc(artistName(p))}`;
@@ -228,7 +237,7 @@
     let list = S.pieces.filter((p) => {
       if (f.cat !== "All" && (p.category || "Uncategorized") !== f.cat) return false;
       if (f.status === "On hand" && !ON_HAND.includes(p.status)) return false;
-      if (f.status !== "On hand" && f.status !== "All" && p.status !== f.status) return false;
+      if (f.status === "Out" ? !isOut(p) : f.status !== "On hand" && f.status !== "All" && p.status !== f.status) return false;
       if (f.agreement !== "All" && (p.agreement || "Consignment") !== f.agreement) return false;
       if (q) { const hay = [p.title, artistName(p), p.materials, p.sku, p.category, p.notes].join(" ").toLowerCase(); if (!hay.includes(q)) return false; }
       return true;
@@ -260,7 +269,7 @@
       </div>
       <div class="filters" style="border-top:0;margin-top:-24px">
         <input class="search" id="q" type="search" placeholder="Search title, artist, material, SKU" value="${esc(S.f.q)}" aria-label="Search">
-        <select id="fStatus" aria-label="Status">${opt([["On hand", "On hand"], ["All", "All statuses"], ...STATUSES.map((s) => [s.id, s.id])], S.f.status)}</select>
+        <select id="fStatus" aria-label="Status">${opt([["On hand", "On hand"], ["All", "All statuses"], ...STATUSES.map((s) => [s.id, s.id]), ["Out", "Out of the gallery"]], S.f.status)}</select>
         <select id="fAgreement" aria-label="Agreement">${opt([["All", "All agreements"], ["Consignment", "Consignment"], ["Acquisition", "Acquisition"]], S.f.agreement)}</select>
         <select id="fSort" aria-label="Sort">${opt([["recent", "Newest first"], ["priceHi", "Price, high to low"], ["priceLo", "Price, low to high"], ["title", "Title A to Z"], ["artist", "Artist A to Z"]], S.f.sort)}</select>
         <div class="seg" role="group" aria-label="Layout"><button aria-pressed="${S.layout === "grid"}" data-layout="grid">Gallery</button><button aria-pressed="${S.layout === "table"}" data-layout="table">Ledger</button></div>
@@ -314,7 +323,7 @@
   function safeUrl(u) { const s = String(u || "").trim(); if (!s) return ""; return /^https?:\/\//i.test(s) ? s : "https://" + s.replace(/^\/+/, ""); }
 
   // ---------- panel ----------
-  function openPanel(type, id, mode = "view") { S.panel = { type, id, mode }; S.photoIdx = 0; S.confirmDelete = false; renderPanel(); }
+  function openPanel(type, id, mode = "view") { S.panel = { type, id, mode }; S.photoIdx = 0; S.confirmDelete = false; S.outFormOpen = false; renderPanel(); }
   function closePanel() { S.panel = null; $("#panelRoot").innerHTML = ""; document.body.style.overflow = ""; }
 
   function renderPanel(fromSync) {
@@ -362,13 +371,14 @@
       ["Condition notes", p.conditionNotes],
     ].filter(([k, v]) => k && has(v));
     const terms = cons
-      ? `Consignment. Artist receives <mark>${split}%</mark> of the sale price net of shipping, paid within <mark>30 days</mark> of sale. Artist ships in; gallery covers return shipping.`
+      ? `Consignment. Artist receives <mark>${split}%</mark> of the sale price net of shipping, paid within <mark>30 days</mark> of sale. Artist ships in; gallery covers return shipping.${p.consignEnd ? ` Consignment runs to <mark>${fdate(p.consignEnd)}</mark>.` : ""}`
       : `Acquisition. Purchased outright for <mark>${has(p.cost) ? usd(p.cost) : "an unrecorded amount"}</mark>. The gallery sets the resale price and owes the artist nothing further after payment.`;
     const pays = (p.payments || []).slice().sort((x, y) => String(x.due).localeCompare(String(y.due)));
     const payRows = pays.length ? `<table class="pays">${pays.map((x) => `<tr>
         <td>${esc(x.label || "Payment")}</td>
         <td class="num" style="${!x.paid && x.due && x.due < today() ? "color:var(--red)" : "color:var(--soft)"}">${x.paid ? "Paid " + fdate(x.paidDate || x.due) : x.due ? "Due " + fdate(x.due) : "No date"}</td>
         <td class="r">${usd(x.amount, { zero: 1 })}</td>
+        <td class="r">${isPayout(x) && p.status === "Sold" && x.id ? `<button class="btn small ghost" data-statement="${esc(p.id)}|${esc(x.id)}">Statement</button>` : ""}</td>
         <td class="r">${x.paid ? `<span class="pill st-gallery">Paid</span>` : S.canWrite ? `<button class="btn small ghost" data-mark-paid="${esc(p.id)}|${esc(x.id)}">Mark paid</button>` : `<span class="pill st-incoming">Open</span>`}</td></tr>`).join("")}</table>`
       : `<div class="empty-line" style="padding:12px 0">No payments recorded.</div>`;
     const fileRow = (label, url) => url ? `<div class="files-link"><div style="min-width:0"><div>${label}</div><div class="u">${esc(url)}</div></div><a class="btn small lime" href="${esc(safeUrl(url))}" target="_blank" rel="noopener">Open</a></div>` : "";
@@ -378,12 +388,13 @@
       <div class="detail-top">
         <div>${tile(p, i)}${photos.length > 1 ? `<div class="thumbs">${photos.map((ph, k) => `<button aria-pressed="${k === i}" data-photo="${k}" aria-label="Photo ${k + 1}"><img src="/_blob/${esc(ph)}" alt=""></button>`).join("")}</div>` : ""}</div>
         <div style="min-width:0">
-          <div style="margin-bottom:10px">${pill(p.status)}${sampleTag(p)}</div>
+          <div style="margin-bottom:10px">${pill(p.status)}${isOut(p) ? ` <span class="pill st-out">${esc(p.out.type)}</span>` : ""}${sampleTag(p)}</div>
           <h2>${esc(p.title || "Untitled")}</h2>
           <div class="by">${a ? `<button class="linkish" style="font-size:14px" data-open-artist="${esc(a.id)}">${esc(a.name)}</button>` : esc(artistName(p))}</div>
           <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
         </div>
       </div>
+      ${outSection(p)}
       <div class="sec"><span class="k">Agreement and money</span>
         <div class="terms">${terms}</div>
         <div class="files-link"><div style="min-width:0"><div>${p.agreementDate ? "Signed " + fdate(p.agreementDate) : `<span style="color:var(--orange)">Signed agreement not recorded</span>`}</div>${p.agreementUrl ? `<div class="u">${esc(p.agreementUrl)}</div>` : ""}</div>${p.agreementUrl ? `<a class="btn small lime" href="${esc(safeUrl(p.agreementUrl))}" target="_blank" rel="noopener">Open agreement</a>` : ""}</div>
@@ -465,6 +476,7 @@
           ${field("buyer", "Buyer", p.buyer, { full: false })}
           ${field("agreementDate", "Agreement signed", p.agreementDate, { type: "date" })}
           ${field("agreementUrl", "Signed agreement link (PDF)", p.agreementUrl, { ph: "https://www.dropbox.com/..." })}
+          ${field("consignEnd", "Consignment ends", p.consignEnd, { type: "date" })}
         </div><div class="hint">Consignment pays the artist their share of the sale net of shipping within 30 days. Acquisition is paid upfront; record that payment below.</div></div>
 
         <div class="sec"><span class="k">Care and insurance</span><div class="grid3">
@@ -508,7 +520,7 @@
     const ps = S.pieces.filter((p) => p.artistId === a.id);
     const facts = [["Studio", a.studio], ["Location", a.location], ["Email", a.email], ["Phone", a.phone], ["Website", a.website], ["Instagram", a.instagram], ["Usual agreement", a.agreement]].filter(([, v]) => has(v));
     return `
-      <div class="bar"><span class="k">Artist</span><div class="acts">${S.canWrite ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small ghost" data-act="close">Close</button></div></div>
+      <div class="bar"><span class="k">Artist</span><div class="acts"><button class="btn small lime" data-act="artist-statement">Statement PDF</button>${S.canWrite ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small ghost" data-act="close">Close</button></div></div>
       <h2>${esc(a.name)}${sampleTag(a)}</h2>
       <div class="by">${esc([a.studio, a.location].filter(Boolean).join(", "))}</div>
       ${a.filesUrl ? `<div class="sec"><span class="k">Files</span><div class="files-link"><div style="min-width:0"><div>Artist folder</div><div class="u">${esc(a.filesUrl)}</div></div><a class="btn small lime" href="${esc(safeUrl(a.filesUrl))}" target="_blank" rel="noopener">Open files</a></div></div>` : ""}
@@ -582,6 +594,7 @@
       receivedDate: g("receivedDate"), expectedDate: g("expectedDate"), followUpDate: g("followUpDate"), followUpNote: g("followUpNote"),
       followUpDone: old && old.followUpDate === g("followUpDate") ? !!old.followUpDone : false,
       agreementDate: g("agreementDate"), agreementUrl: g("agreementUrl"),
+      consignEnd: g("consignEnd") || (g("agreement") !== "Acquisition" && (g("agreementDate") || g("receivedDate")) ? addMonths(g("agreementDate") || g("receivedDate"), n(setting("consignMonths"))) : ""),
       insuranceValue: numOrNull("insuranceValue"), condition: g("condition"), conditionDate: g("conditionDate"), conditionNotes: g("conditionNotes"),
       filesUrl: g("filesUrl"), notes: g("notes"), payments, photos: S.formPhotos || [],
       updatedAt: new Date().toISOString(),
@@ -652,6 +665,7 @@
     payment: "Payment by wire transfer or check payable to XIIO, LLC. Wire details are provided on request.",
     terms: "Title passes to the buyer on receipt of full payment. Pieces are released for delivery once payment clears.",
     dueDays: 14,
+    consignMonths: 12,
   };
   const setting = (k) => (has(S.settings[k]) ? S.settings[k] : INV_DEFAULTS[k]);
   const usd2 = (v) => "$" + n(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -659,7 +673,7 @@
 
   function invTotals(inv) {
     const sub = cents((inv.items || []).reduce((s, i) => s + n(i.price), 0));
-    const disc = Math.min(sub, n(inv.discount));
+    const disc = Math.min(sub, cents(n(inv.discount) + sub * n(inv.discountPct) / 100));
     const ship = n(inv.shipping);
     const taxable = inv.taxExempt ? 0 : sub - disc + (inv.taxShipping ? ship : 0);
     const tax = Math.round(taxable * n(inv.taxRate)) / 100;
@@ -671,20 +685,22 @@
   function invStatus(inv) {
     const t = invTotals(inv);
     if (inv.voided) return "Void";
+    if (isQuote(inv)) return inv.convertedTo ? "Accepted" : inv.sent && inv.dueDate && inv.dueDate < today() ? "Expired" : inv.sent ? "Sent" : "Draft";
     if (t.total > 0 && t.paid >= t.total) return "Paid";
     if (t.paid > 0) return "Partially paid";
     return inv.sent ? "Sent" : "Draft";
   }
-  const INV_CLS = { Draft: "st-hold", Sent: "st-incoming", "Partially paid": "st-incoming", Paid: "st-gallery", Void: "st-returned" };
+  const INV_CLS = { Draft: "st-hold", Sent: "st-incoming", "Partially paid": "st-incoming", Paid: "st-gallery", Void: "st-returned", Accepted: "st-gallery", Expired: "st-returned" };
   const invPill = (inv) => { const s = invStatus(inv); return `<span class="pill ${INV_CLS[s]}">${esc(s)}</span>`; };
   const clientName = (inv) => inv.client?.company || inv.client?.name || "No client";
-  const openInvoices = () => S.invoices.filter((i) => ["Sent", "Partially paid"].includes(invStatus(i)));
-  const invoiceForPiece = (pid) => S.invoices.find((i) => !i.voided && (i.items || []).some((x) => x.pieceId === pid));
+  const openInvoices = () => S.invoices.filter((i) => !isQuote(i) && ["Sent", "Partially paid"].includes(invStatus(i)));
+  const discLabel = (inv) => (n(inv.discountPct) ? `Discount (${n(inv.discountPct)}% trade${n(inv.discount) ? " plus " + usd2(inv.discount) : ""})` : "Discount");
+  const invoiceForPiece = (pid) => S.invoices.find((i) => !i.voided && !isQuote(i) && (i.items || []).some((x) => x.pieceId === pid));
 
-  function nextInvNumber() {
-    const yr = new Date().getFullYear();
-    const max = S.invoices.reduce((m, i) => { const k = new RegExp("TO-INV-" + yr + "-(\\d+)").exec(i.number || ""); return k ? Math.max(m, +k[1]) : m; }, 0);
-    return `TO-INV-${yr}-${String(max + 1).padStart(3, "0")}`;
+  function nextInvNumber(type = "invoice") {
+    const yr = new Date().getFullYear(), pre = type === "quote" ? "TO-Q-" : "TO-INV-";
+    const max = S.invoices.reduce((m, i) => { const k = new RegExp(pre + yr + "-(\\d+)").exec(i.number || ""); return k ? Math.max(m, +k[1]) : m; }, 0);
+    return `${pre}${yr}-${String(max + 1).padStart(3, "0")}`;
   }
 
   function itemFromPiece(p) {
@@ -694,28 +710,30 @@
 
   function viewInvoices() {
     const yr = String(new Date().getFullYear());
-    const list = [...S.invoices].sort((a, b) => String(b.number).localeCompare(String(a.number)));
+    const quotes = S.invTab === "quotes";
+    const list = S.invoices.filter((i) => quotes === isQuote(i)).sort((a, b) => String(b.number).localeCompare(String(a.number)));
     const outstanding = openInvoices().reduce((s, i) => s + invTotals(i).balance, 0);
     const paidYr = S.invoices.filter((i) => !i.voided).reduce((s, i) => s + (i.received || []).filter((r) => (r.date || "").startsWith(yr)).reduce((a, r) => a + n(r.amount), 0), 0);
-    const drafts = S.invoices.filter((i) => invStatus(i) === "Draft").length;
+    const drafts = S.invoices.filter((i) => !isQuote(i) && invStatus(i) === "Draft").length;
     const rows = list.map((i) => {
       const t = invTotals(i), st = invStatus(i), late = ["Sent", "Partially paid"].includes(st) && i.dueDate && i.dueDate < today();
       return `<tr class="click" data-open-invoice="${esc(i.id)}" tabindex="0">
         <td class="num">${esc(i.number)}</td><td><span class="tt">${esc(clientName(i))}</span>${i.sample ? `<span class="sample">Sample</span>` : ""}</td>
         <td>${(i.items || []).map((x) => esc(x.title)).join(", ")}</td>
         <td class="num">${fdate(i.date)}</td><td class="num" style="${late ? "color:var(--red)" : ""}">${["Sent", "Partially paid"].includes(st) ? fdate(i.dueDate) : ""}</td>
-        <td class="r">${usd2(t.total)}</td><td class="r" style="${t.balance && st !== "Void" && st !== "Draft" ? "color:var(--orange)" : ""}">${st === "Void" ? "" : usd2(t.balance)}</td><td>${invPill(i)}</td></tr>`;
+        <td class="r">${usd2(t.total)}</td><td class="r" style="${t.balance && !isQuote(i) && st !== "Void" && st !== "Draft" ? "color:var(--orange)" : ""}">${st === "Void" || isQuote(i) ? "" : usd2(t.balance)}</td><td>${invPill(i)}</td></tr>`;
     }).join("");
     return `
       <div class="head"><h1><em class="s">Invoices</em></h1>
-        <div class="tools">${S.canWrite ? `<button class="btn ghost" data-act="inv-settings">Invoice settings</button><button class="btn" data-act="new-invoice">New invoice</button>` : ""}</div></div>
+        <div class="tools">${S.downloads ? `<button class="btn ghost" data-act="export-invoices">Export CSV</button>` : ""}${S.canWrite ? `<button class="btn ghost" data-act="inv-settings">Settings</button><button class="btn ghost" data-act="new-quote">New quote</button><button class="btn" data-act="new-invoice">New invoice</button>` : ""}</div></div>
       <div class="figures" style="grid-template-columns:repeat(3,minmax(0,1fr))">
         <div class="owed"><span class="k">Outstanding</span><div class="v num">${usd(outstanding, { zero: 1 })}</div><div class="sub">${openInvoices().length} open ${openInvoices().length === 1 ? "invoice" : "invoices"}</div></div>
         <div><span class="k">Received ${yr}</span><div class="v num">${usd(paidYr, { zero: 1 })}</div><div class="sub">payments recorded this year</div></div>
         <div><span class="k">Drafts</span><div class="v num">${drafts}</div><div class="sub">not yet sent</div></div>
       </div>
-      ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Number</th><th>Client</th><th>Pieces</th><th>Date</th><th>Due</th><th class="r">Total</th><th class="r">Balance</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`
-        : `<div class="empty-line">No invoices yet. Start one here, or from any piece with Create invoice.</div>`}`;
+      <div class="filters"><div class="seg" style="margin-left:0" role="group" aria-label="Invoices or quotes"><button aria-pressed="${!quotes}" data-inv-tab="invoices">Invoices</button><button aria-pressed="${quotes}" data-inv-tab="quotes">Quotes</button></div></div>
+      ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Number</th><th>Client</th><th>Pieces</th><th>Date</th><th>${quotes ? "Valid until" : "Due"}</th><th class="r">Total</th><th class="r">Balance</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-line">${quotes ? "No quotes yet. A quote turns into an invoice in one tap once the client agrees." : "No invoices yet. Start one here, or from any piece with Create invoice."}</div>`}`;
   }
 
   // ----- invoice detail: an on-screen copy of the document -----
@@ -724,17 +742,17 @@
     const line = (k, v, cls = "") => `<div class="iv-row ${cls}"><span>${k}</span><span class="num">${v}</span></div>`;
     return `<div class="iv-doc">
       <div class="iv-top"><span class="x">XIIO</span><span class="serif">Twelve Objects</span></div>
-      <div class="iv-head"><h3><em class="s">Invoice</em></h3><dl><dt>No.</dt><dd>${esc(inv.number)}</dd><dt>Date</dt><dd>${fdate(inv.date)}</dd><dt>Due</dt><dd>${fdate(inv.dueDate)}</dd></dl></div>
+      <div class="iv-head"><h3><em class="s">${isQuote(inv) ? "Quote" : "Invoice"}</em></h3><dl><dt>No.</dt><dd>${esc(inv.number)}</dd><dt>Date</dt><dd>${fdate(inv.date)}</dd><dt>${isQuote(inv) ? "Valid until" : "Due"}</dt><dd>${fdate(inv.dueDate)}</dd></dl></div>
       <div class="iv-parties"><div><span class="k">Billed to</span>${[c.name, c.company, ...(c.address || "").split("\n"), c.email, c.phone].filter(Boolean).map((x) => `<div>${esc(x)}</div>`).join("") || "<div>Client not set</div>"}</div>
         <div><span class="k">From</span><div>XIIO, LLC, doing business as Twelve Objects</div><div>8906 Olympic Blvd</div><div>Beverly Hills, CA 90211</div><div>cs@twelveobjects.com · 424.279.5683</div></div></div>
       <div class="iv-items">${(inv.items || []).map((x) => { const p = S.pieces.find((q) => q.id === x.pieceId);
         return `<div class="iv-item">${p ? `<div class="iv-th">${tile(p)}</div>` : `<div></div>`}<div style="min-width:0"><div class="serif" style="font-size:16px">${esc(x.title)}</div><div class="iv-sm">${esc(x.artist)}</div><div class="iv-sm">${esc([x.details, x.sku].filter(Boolean).join(" · "))}</div></div><div class="num">${usd2(x.price)}</div></div>`; }).join("") || `<div class="empty-line">No pieces on this invoice.</div>`}</div>
       <div class="iv-totals">
-        ${line("Subtotal", usd2(t.sub))}${t.disc ? line("Discount", "−" + usd2(t.disc)) : ""}${t.ship ? line("Shipping and crating", usd2(t.ship)) : ""}
+        ${line("Subtotal", usd2(t.sub))}${t.disc ? line(discLabel(inv), "−" + usd2(t.disc)) : ""}${t.ship ? line("Shipping and crating", usd2(t.ship)) : ""}
         ${inv.taxExempt ? line("Sales tax", "Exempt" + (inv.taxNote ? ", " + esc(inv.taxNote) : "")) : line(`Sales tax (${n(inv.taxRate)}%)`, usd2(t.tax))}
         ${line("Total", usd2(t.total), "big")}${t.paid ? line("Paid to date", "−" + usd2(t.paid)) : ""}
         ${inv.terms === "deposit" && !t.paid ? line(`Deposit due now (${n(inv.depositPct || 50)}%)`, usd2(t.deposit)) : ""}
-        ${line("Balance due", usd2(t.balance), "due")}
+        ${isQuote(inv) ? "" : line("Balance due", usd2(t.balance), "due")}
       </div>
       <div class="iv-foot"><div><span class="k">Payment</span><p>${esc(inv.paymentNote || setting("payment"))}</p></div><div><span class="k">Terms</span><p>${esc(inv.termsNote || setting("terms"))}</p>${inv.notes ? `<p>${esc(inv.notes)}</p>` : ""}</div></div>
     </div>`;
@@ -751,14 +769,17 @@
     const can = S.canWrite && st !== "Void";
     return `
       <div class="bar"><span class="k">${esc(inv.number)} · ${invPill(inv)}</span>
-        <div class="acts">${can && st !== "Paid" ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small lime" data-act="inv-pdf">Download PDF</button><button class="btn small ghost" data-act="close">Close</button></div></div>
+        <div class="acts">${can && st !== "Paid" && st !== "Accepted" ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small lime" data-act="inv-pdf">Download PDF</button><button class="btn small ghost" data-act="close">Close</button></div></div>
       ${(() => { const cl = S.clients.find((x) => x.id === inv.clientId); return cl ? `<div class="by">For <button class="linkish" style="font-size:14px" data-open-client="${esc(cl.id)}">${esc(clientLabel(cl))}</button></div>` : ""; })()}
+      ${inv.convertedTo ? `<div class="by">Accepted. <button class="linkish" style="font-size:14px" data-open-invoice="${esc(inv.convertedTo)}">Open the invoice</button></div>` : ""}
+      ${inv.fromQuote ? `<div class="by">Made from <button class="linkish" style="font-size:14px" data-open-invoice="${esc(inv.fromQuote)}">${esc((S.invoices.find((x) => x.id === inv.fromQuote) || {}).number || "a quote")}</button></div>` : ""}
       ${invoiceDoc(inv)}
       ${can ? `<div class="iv-actions">
         ${st === "Draft" ? `<button class="btn small" data-act="inv-sent">Mark as sent</button>` : ""}
-        ${st !== "Paid" ? `<button class="btn small ghost" data-act="inv-pay-open">Record payment</button>` : ""}
-        ${st !== "Paid" && t.balance > 0 ? `<button class="btn small ghost" data-act="inv-paid-full">Paid in full</button>` : ""}
-        ${st !== "Paid" ? (S.confirmDelete ? `<span class="err">Void this invoice and release its pieces?</span><button class="btn small danger" data-act="inv-void">Void</button><button class="btn small ghost" data-act="keep-inv">Keep</button>` : `<button class="btn small danger" data-act="inv-ask-void">Void</button>`) : ""}
+        ${isQuote(inv) && !inv.convertedTo ? `<button class="btn small lime" data-act="quote-convert">Convert to invoice</button>` : ""}
+        ${!isQuote(inv) && st !== "Paid" ? `<button class="btn small ghost" data-act="inv-pay-open">Record payment</button>` : ""}
+        ${!isQuote(inv) && st !== "Paid" && t.balance > 0 ? `<button class="btn small ghost" data-act="inv-paid-full">Paid in full</button>` : ""}
+        ${st !== "Paid" && st !== "Accepted" ? (S.confirmDelete ? `<span class="err">${isQuote(inv) ? "Void this quote?" : "Void this invoice and release its pieces?"}</span><button class="btn small danger" data-act="inv-void">Void</button><button class="btn small ghost" data-act="keep-inv">Keep</button>` : `<button class="btn small danger" data-act="inv-ask-void">Void</button>`) : ""}
       </div>` : ""}
       ${payForm}
       ${recv ? `<div class="sec" style="margin-top:18px"><span class="k">Payments received</span><table class="pays">${recv}</table></div>` : ""}
@@ -769,13 +790,14 @@
   function invoiceForm(inv) {
     const isNew = !inv?.id;
     inv = inv || {};
+    const quote = isQuote(inv), noun = quote ? "quote" : "invoice";
     if (!S.invDraft) S.invDraft = (inv.items || []).map((x) => ({ ...x }));
     const c = inv.client || {};
-    const busy = new Set(S.invoices.filter((i) => !i.voided && i.id !== inv.id).flatMap((i) => (i.items || []).map((x) => x.pieceId)));
+    const busy = new Set(S.invoices.filter((i) => !i.voided && !isQuote(i) && i.id !== inv.id).flatMap((i) => (i.items || []).map((x) => x.pieceId)));
     const avail = S.pieces.filter((p) => !["Sold", "Returned"].includes(p.status) && !busy.has(p.id) && !S.invDraft.some((x) => x.pieceId === p.id));
     return `
-      <div class="bar"><span class="k">${isNew ? "New invoice" : "Editing " + esc(inv.number)}</span><div class="acts"><button class="btn small ghost" data-act="${isNew ? "close" : "cancel-edit"}">Cancel</button></div></div>
-      <h2>${isNew ? "New <em class='s'>invoice</em>" : esc(inv.number)}</h2>
+      <div class="bar"><span class="k">${isNew ? "New " + noun : "Editing " + esc(inv.number)}</span><div class="acts"><button class="btn small ghost" data-act="${isNew ? "close" : "cancel-edit"}">Cancel</button></div></div>
+      <h2>${isNew ? `New <em class='s'>${noun}</em>` : esc(inv.number)}</h2>
       <form id="invoiceForm" autocomplete="off" novalidate>
         <div class="sec"><span class="k">Client</span><div class="grid2">
           ${field("clientId", "Saved client", inv.clientId || "", { full: true, options: [["", "New client, fill in below"], ...S.clients.map((x) => [x.id, clientLabel(x)])] })}
@@ -795,7 +817,8 @@
         </div>
 
         <div class="sec"><span class="k">Charges</span><div class="grid3">
-          ${field("discount", "Discount ($)", inv.discount, { type: "number" })}
+          ${field("discountPct", "Trade discount %", inv.discountPct, { type: "number" })}
+          ${field("discount", "Extra discount ($)", inv.discount, { type: "number" })}
           ${field("shipping", "Shipping and crating", inv.shipping, { type: "number" })}
           ${field("taxRate", "Sales tax %", has(inv.taxRate) ? inv.taxRate : setting("taxRate"), { type: "number" })}
           <label class="chk-row"><input type="checkbox" id="f-taxExempt" name="taxExempt"${inv.taxExempt ? " checked" : ""}> Tax exempt</label>
@@ -804,9 +827,9 @@
         </div></div>
 
         <div class="sec"><span class="k">Dates and terms</span><div class="grid3">
-          ${field("number", "Invoice number", inv.number || nextInvNumber())}
+          ${field("number", quote ? "Quote number" : "Invoice number", inv.number || nextInvNumber(noun))}<input type="hidden" name="docType" value="${noun}">
           ${field("date", "Invoice date", inv.date || today(), { type: "date" })}
-          ${field("dueDate", "Due date", inv.dueDate || addDays(today(), n(setting("dueDays"))), { type: "date" })}
+          ${field("dueDate", quote ? "Valid until" : "Due date", inv.dueDate || addDays(today(), quote ? 30 : n(setting("dueDays"))), { type: "date" })}
           ${field("terms", "Payment", inv.terms || "full", { options: [["full", "Paid in full"], ["deposit", "Deposit, then balance"]] })}
           ${field("depositPct", "Deposit %", inv.depositPct ?? 50, { type: "number" })}
         </div></div>
@@ -821,7 +844,7 @@
 
         <div class="form-acts">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${!isNew && invStatus(inv) === "Draft" ? (S.confirmDelete ? `<span class="err">Delete this draft?</span><button type="button" class="btn small danger" data-act="inv-delete">Delete</button><button type="button" class="btn small ghost" data-act="keep-inv">Keep</button>` : `<button type="button" class="btn small danger" data-act="inv-ask-delete">Delete draft</button>`) : ""}</div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="err" id="formErr"></span><button type="submit" class="btn">${isNew ? "Create invoice" : "Save invoice"}</button></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="err" id="formErr"></span><button type="submit" class="btn">${isNew ? "Create " + noun : "Save " + noun}</button></div>
         </div>
       </form>`;
   }
@@ -834,7 +857,7 @@
   function readInvForm(form) {
     const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
     return {
-      clientId: g("clientId"),
+      clientId: g("clientId"), docType: g("docType") || "invoice", discountPct: n(g("discountPct")),
       client: { name: g("clientName"), company: g("clientCompany"), email: g("clientEmail"), phone: g("clientPhone"), address: g("clientAddress") },
       items: S.invDraft.map((x) => ({ ...x, price: n(x.price) })),
       discount: n(g("discount")), shipping: n(g("shipping")), taxRate: n(g("taxRate")),
@@ -846,7 +869,7 @@
   function invLiveHtml(inv) {
     const t = invTotals(inv);
     return `<div class="iv-row"><span>Subtotal</span><span class="num">${usd2(t.sub)}</span></div>
-      ${t.disc ? `<div class="iv-row"><span>Discount</span><span class="num">−${usd2(t.disc)}</span></div>` : ""}
+      ${t.disc ? `<div class="iv-row"><span>${discLabel(inv)}</span><span class="num">−${usd2(t.disc)}</span></div>` : ""}
       ${t.ship ? `<div class="iv-row"><span>Shipping and crating</span><span class="num">${usd2(t.ship)}</span></div>` : ""}
       <div class="iv-row"><span>Sales tax${inv.taxExempt ? ", exempt" : ` (${n(inv.taxRate)}%)`}</span><span class="num">${usd2(t.tax)}</span></div>
       <div class="iv-row big"><span>Total</span><span class="num">${usd2(t.total)}</span></div>
@@ -867,9 +890,9 @@
     if (!old) { full.createdAt = full.updatedAt; full.received = []; full.sent = false; }
     const id = P.id || "inv-" + uid();
     const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
-    if (await write("invoices/" + id, clean(full), old ? "Invoice saved" : "Invoice created")) {
+    if (await write("invoices/" + id, clean(full), (isQuote(full) ? "Quote" : "Invoice") + (old ? " saved" : " created"))) {
       S.invDraft = null; S.panel = { type: "invoice", id, mode: "view", saved: Date.now() }; renderPanel();
-      if (full.sent) await holdPieces({ ...full, id });
+      if (full.sent && !isQuote(full)) await holdPieces({ ...full, id });
     } else btn.disabled = false;
   }
 
@@ -926,7 +949,8 @@
       <h2>Invoice <em class="s">settings</em></h2>
       <form id="settingsForm" novalidate><div class="sec"><span class="k">Defaults for new invoices</span><div class="grid2">
         ${field("taxRate", "Sales tax %", setting("taxRate"), { type: "number" })}
-        ${field("dueDays", "Days until due", setting("dueDays"), { type: "number" })}
+        ${field("dueDays", "Days until an invoice is due", setting("dueDays"), { type: "number" })}
+        ${field("consignMonths", "Consignment term (months)", setting("consignMonths"), { type: "number" })}
         ${field("payment", "Payment instructions", setting("payment"), { type: "textarea", full: true })}
         ${field("terms", "Terms", setting("terms"), { type: "textarea", full: true })}
       </div><div class="hint">Confirm the sales tax rate with your accountant. Existing invoices keep the rate they were made with.</div></div>
@@ -934,7 +958,7 @@
   }
   async function saveSettings(form) {
     const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
-    const data = { ...S.settings, taxRate: n(g("taxRate")), dueDays: n(g("dueDays")) || 14, payment: g("payment"), terms: g("terms") };
+    const data = { ...S.settings, taxRate: n(g("taxRate")), dueDays: n(g("dueDays")) || 14, consignMonths: n(g("consignMonths")) || 12, payment: g("payment"), terms: g("terms") };
     if (await write("settings/gallery", data, "Settings saved")) closePanel();
   }
 
@@ -971,8 +995,8 @@
       txt(total > 1 ? `${right}  ·  ${i} of ${total}` : right, R, 756, { size: 7.5, color: SOFT, align: "right" });
     };
     masthead();
-    txt("Invoice", L, 120, { font: "times", style: "italic", size: 40, color: GREEN });
-    const meta = [["Invoice no.", inv.number], ["Date", fdate(inv.date)], ["Due", fdate(inv.dueDate)]];
+    txt(isQuote(inv) ? "Quote" : "Invoice", L, 120, { font: "times", style: "italic", size: 40, color: GREEN });
+    const meta = [[isQuote(inv) ? "Quote no." : "Invoice no.", inv.number], ["Date", fdate(inv.date)], [isQuote(inv) ? "Valid until" : "Due", fdate(inv.dueDate)]];
     meta.forEach(([k, v], i) => { txt(k.toUpperCase(), 400, 92 + i * 16, { size: 7, color: SOFT }); txt(v, R, 92 + i * 16, { size: 9.5, align: "right" }); });
     if (st === "Paid" || st === "Void") { d.setFillColor(...(st === "Paid" ? LIME : [247, 205, 210])); d.rect(L + 160, 96, 64, 22, "F"); txt(st.toUpperCase(), L + 192, 111, { size: 10, style: "bold", align: "center", color: st === "Paid" ? GREEN : [216, 27, 55] }); }
 
@@ -1003,7 +1027,7 @@
     }
 
     const rows = [["Subtotal", usd2(t.sub)]];
-    if (t.disc) rows.push(["Discount", "-" + usd2(t.disc)]);
+    if (t.disc) rows.push([discLabel(inv), "-" + usd2(t.disc)]);
     if (t.ship) rows.push(["Shipping and crating", usd2(t.ship)]);
     rows.push(inv.taxExempt ? ["Sales tax", "Exempt" + (inv.taxNote ? ", " + inv.taxNote : "")] : [`Sales tax (${n(inv.taxRate)}%)`, usd2(t.tax)]);
     const after = [];
@@ -1017,8 +1041,10 @@
     d.setDrawColor(...INK); d.setLineWidth(0.75); d.line(TX, y - 8, R, y - 8);
     txt("Total", TX, y + 8, { font: "times", size: 15 }); txt(usd2(t.total), R, y + 8, { font: "times", size: 15, align: "right" }); y += 26;
     after.forEach(([k, v]) => { txt(k, TX, y, { size: 9.5, color: SOFT }); txt(v, R, y, { size: 9.5, align: "right" }); y += 17; });
-    d.setFillColor(...LIME); d.rect(TX - 6, y - 12, R - TX + 12, 20, "F");
-    txt("Balance due", TX, y + 2, { size: 10, style: "bold" }); txt(usd2(t.balance), R, y + 2, { size: 10, style: "bold", align: "right" });
+    if (!isQuote(inv)) {
+      d.setFillColor(...LIME); d.rect(TX - 6, y - 12, R - TX + 12, 20, "F");
+      txt("Balance due", TX, y + 2, { size: 10, style: "bold" }); txt(usd2(t.balance), R, y + 2, { size: 10, style: "bold", align: "right" });
+    }
     y += 36;
 
     const block = (label, body) => {
@@ -1044,7 +1070,8 @@
   // ---------- clients ----------
   const CLIENT_TYPES = ["Collector", "Designer or trade", "Institution", "Other"];
   const sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
-  const invoicesFor = (c) => S.invoices.filter((i) => i.clientId === c.id || (!i.clientId && sameName(i.client?.name, c.name)));
+  const forClient = (c) => S.invoices.filter((i) => i.clientId === c.id || (!i.clientId && sameName(i.client?.name, c.name)));
+  const invoicesFor = (c) => S.invoices.filter((i) => !isQuote(i) && (i.clientId === c.id || (!i.clientId && sameName(i.client?.name, c.name))));
   const clientLabel = (c) => c.company ? `${c.name}, ${c.company}` : c.name;
   // Purchases count paid and partly paid invoices; voids and drafts don't.
   function clientStats(c) {
@@ -1064,7 +1091,7 @@
   function viewClients() {
     const q = (S.clientQ || "").trim().toLowerCase();
     const list = S.clients.filter((c) => !q || [c.name, c.company, c.email, c.phone, c.address, c.type, c.interests].join(" ").toLowerCase().includes(q));
-    const tools = S.canWrite ? `<button class="btn" data-act="new-client">Add client</button>` : "";
+    const tools = (S.downloads && S.clients.length ? `<button class="btn ghost" data-act="export-clients">Export CSV</button>` : "") + (S.canWrite ? `<button class="btn" data-act="new-client">Add client</button>` : "");
     if (!S.clients.length) return `<div class="head"><h1><em class="s">Clients</em></h1><div class="tools">${tools}</div></div><div class="empty-line">No clients yet. Add someone you've met, or they're saved automatically the first time you invoice them.</div>`;
     const cards = list.map((c) => {
       const st = clientStats(c);
@@ -1084,10 +1111,10 @@
   function clientDetail(c) {
     const st = clientStats(c);
     const facts = [["Type", c.type], ["Email", c.email], ["Phone", c.phone], ["Address", c.address], ["Instagram", c.instagram], ["Met", [fdate(c.metDate), c.source].filter(Boolean).join(", ")], ["Interests", c.interests],
-      ["Resale certificate", [c.resaleCert, c.resaleExpiry && "expires " + fdate(c.resaleExpiry)].filter(Boolean).join(", ")]].filter(([, v]) => has(v));
+      ["Trade discount", c.tradeDiscount ? c.tradeDiscount + "%" : ""], ["Resale certificate", [c.resaleCert, c.resaleExpiry && "expires " + fdate(c.resaleExpiry)].filter(Boolean).join(", ")]].filter(([, v]) => has(v));
     const rows = st.invs.sort((a, b) => String(b.date).localeCompare(String(a.date))).map((i) => `<tr class="click" data-open-invoice="${esc(i.id)}" tabindex="0"><td class="num">${esc(i.number)}</td><td class="num">${fdate(i.date)}</td><td>${(i.items || []).map((x) => esc(x.title)).join(", ")}</td><td class="r">${usd2(invTotals(i).total)}</td><td>${invPill(i)}</td></tr>`).join("");
     return `
-      <div class="bar"><span class="k">Client</span><div class="acts">${S.canWrite ? `<button class="btn small lime" data-act="new-invoice-client" data-client="${esc(c.id)}">New invoice</button><button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small ghost" data-act="close">Close</button></div></div>
+      <div class="bar"><span class="k">Client</span><div class="acts">${S.canWrite ? `<button class="btn small ghost" data-act="new-quote-client" data-client="${esc(c.id)}">New quote</button><button class="btn small lime" data-act="new-invoice-client" data-client="${esc(c.id)}">New invoice</button><button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small ghost" data-act="close">Close</button></div></div>
       <h2>${esc(c.name)}${sampleTag(c)}</h2>
       <div class="by">${esc([c.company, c.type].filter(Boolean).join(" · "))}</div>
       <div class="sec"><div class="money" style="grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--rule)">
@@ -1098,6 +1125,7 @@
       <div class="sec"><span class="k">Details</span><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd style="white-space:pre-line">${esc(v)}</dd>`).join("") || "<dt>Details</dt><dd>Not recorded yet</dd>"}</dl></div>
       ${c.notes ? `<div class="sec"><span class="k">Notes</span><div class="notes">${esc(c.notes)}</div></div>` : ""}
       <div class="sec"><span class="k">Invoices (${st.invs.length})</span>${rows ? `<div class="tbl-wrap" style="border-top:0"><table class="tbl" style="min-width:520px"><tbody>${rows}</tbody></table></div>` : `<div class="empty-line">No invoices yet.</div>`}</div>
+      ${(() => { const qs = forClient(c).filter(isQuote); return qs.length ? `<div class="sec"><span class="k">Quotes (${qs.length})</span><div class="tbl-wrap" style="border-top:0"><table class="tbl" style="min-width:520px"><tbody>${qs.map((i) => `<tr class="click" data-open-invoice="${esc(i.id)}" tabindex="0"><td class="num">${esc(i.number)}</td><td class="num">${fdate(i.date)}</td><td>${(i.items || []).map((x) => esc(x.title)).join(", ")}</td><td class="r">${usd2(invTotals(i).total)}</td><td>${invPill(i)}</td></tr>`).join("")}</tbody></table></div></div>` : ""; })()}
       <div class="sec"><span class="k">Pieces bought (${st.pieces.length})</span>${st.pieces.length ? `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px 14px;margin-top:14px">${st.pieces.map(card).join("")}</div>` : `<div class="empty-line">Nothing bought yet.</div>`}</div>`;
   }
 
@@ -1126,7 +1154,8 @@
         <div class="sec"><span class="k">Trade and tax</span><div class="grid2">
           ${field("resaleCert", "Resale certificate number", c.resaleCert)}
           ${field("resaleExpiry", "Certificate expires", c.resaleExpiry, { type: "date" })}
-        </div><div class="hint">With a resale certificate on file, new invoices for this client start as tax exempt.</div></div>
+          ${field("tradeDiscount", "Trade discount %", c.tradeDiscount, { type: "number", ph: "e.g. 10 or 15" })}
+        </div><div class="hint">New invoices and quotes for this client start with their trade discount, and as tax exempt while their resale certificate is valid.</div></div>
         <div class="sec"><span class="k">Notes</span><div class="grid2">${field("notes", "Notes", c.notes, { type: "textarea", full: true })}</div></div>
         <div class="form-acts">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${isNew ? "" : S.confirmDelete ? `<span class="err">Delete this client? Their invoices stay.</span><button type="button" class="btn small danger" data-act="delete-client">Delete</button><button type="button" class="btn small ghost" data-act="keep-client">Keep</button>` : `<button type="button" class="btn small danger" data-act="ask-delete-client">Delete client</button>`}</div>
@@ -1140,7 +1169,7 @@
     const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
     if (!g("name")) { $("#formErr").textContent = "Add a name to save."; return; }
     const data = { ...(old || {}) };
-    for (const k of ["name", "company", "type", "instagram", "email", "phone", "address", "metDate", "source", "interests", "resaleCert", "resaleExpiry", "notes"]) data[k] = g(k);
+    for (const k of ["name", "company", "type", "instagram", "email", "phone", "address", "metDate", "source", "interests", "resaleCert", "resaleExpiry", "tradeDiscount", "notes"]) data[k] = g(k);
     delete data.id; data.updatedAt = new Date().toISOString(); if (!old) data.createdAt = data.updatedAt;
     const id = P.id || "cl-" + uid();
     if (await write("clients/" + id, data, old ? "Saved" : "Client added")) { S.panel = { type: "client", id, mode: "view", saved: Date.now() }; renderPanel(); }
@@ -1149,7 +1178,7 @@
   // What a new invoice starts with for a saved client.
   function invoiceSeedFor(c) {
     const exempt = !!c.resaleCert && !(c.resaleExpiry && c.resaleExpiry < today());
-    return { clientId: c.id, client: { name: c.name, company: c.company, email: c.email, phone: c.phone, address: c.address }, taxExempt: exempt, taxNote: exempt ? "Resale certificate " + c.resaleCert : "" };
+    return { clientId: c.id, client: { name: c.name, company: c.company, email: c.email, phone: c.phone, address: c.address }, taxExempt: exempt, taxNote: exempt ? "Resale certificate " + c.resaleCert : "", discountPct: n(c.tradeDiscount) || 0 };
   }
   function fillInvoiceClient(c) {
     const f = $("#invoiceForm"); if (!f) return;
@@ -1157,6 +1186,7 @@
     el.clientId.value = c.id;
     el.clientName.value = c.name || ""; el.clientCompany.value = c.company || ""; el.clientEmail.value = c.email || ""; el.clientPhone.value = c.phone || ""; el.clientAddress.value = c.address || "";
     if (s.taxExempt) { el.taxExempt.checked = true; el.taxNote.value = s.taxNote; }
+    if (s.discountPct) el.discountPct.value = s.discountPct;
     refreshInvLive();
   }
   // An invoice always ends up tied to a client record: the chosen one, one with the same name, or a new one.
@@ -1174,14 +1204,178 @@
     return id;
   }
 
+  // ---------- pieces out on approval or loan ----------
+  const OUT_TYPES = ["On approval", "Loan", "Fair or exhibition", "Photo shoot", "Conservation"];
+  const isOut = (p) => !!(p.out && p.out.active);
+  function outSection(p) {
+    if (isOut(p)) {
+      const o = p.out, late = o.due && o.due < today();
+      return `<div class="sec"><span class="k">Out of the gallery</span><div class="files-link"><div style="min-width:0">
+        <div>${esc(o.type)} with ${o.clientId ? `<button class="linkish" style="font-size:13.5px" data-open-client="${esc(o.clientId)}">${esc(o.with)}</button>` : esc(o.with)}</div>
+        <div class="u" style="${late ? "color:var(--red)" : ""}">Since ${fdate(o.since)}${o.due ? ` · due back ${fdate(o.due)} (${rel(o.due)})` : ""}${o.notes ? " · " + esc(o.notes) : ""}</div></div>
+        ${S.canWrite ? `<button class="btn small lime" data-act="out-return">Mark returned</button>` : ""}</div></div>`;
+    }
+    const hist = (p.outHistory || []).slice(-3).reverse().map((o) => `<div class="u">${esc(o.type)} with ${esc(o.with)}, ${fdate(o.since)} to ${fdate(o.returned)}</div>`).join("");
+    if (!S.canWrite || ["Sold", "Returned"].includes(p.status)) return hist ? `<div class="sec"><span class="k">Out of the gallery</span><div class="files-link"><div>${hist}</div></div></div>` : "";
+    if (!S.outFormOpen) return `<div class="sec"><span class="k">Out of the gallery</span><div class="files-link"><div style="min-width:0"><div>In the gallery's care</div>${hist}</div><button class="btn small ghost" data-act="out-open">Send out</button></div></div>`;
+    return `<div class="sec"><span class="k">Send out</span><form id="outForm" class="grid2" style="padding-top:12px" novalidate>
+      ${field("outType", "Reason", "On approval", { options: OUT_TYPES })}
+      ${field("outWith", "With whom or where", "", { list: "outClients", req: true, ph: "Client, designer, fair or studio" })}
+      ${field("outSince", "Left the gallery", today(), { type: "date" })}
+      ${field("outDue", "Due back", addDays(today(), 14), { type: "date" })}
+      ${field("outNotes", "Notes", "", { full: true, ph: "Address, insurance, who signed for it" })}
+      <datalist id="outClients">${S.clients.map((c) => `<option value="${esc(c.name)}">`).join("")}</datalist>
+      <div class="full" style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn small ghost" data-act="out-cancel">Cancel</button><button type="submit" class="btn small">Send out</button></div>
+    </form></div>`;
+  }
+  async function sendOut(form) {
+    const p = S.pieces.find((x) => x.id === S.panel.id); if (!p) return;
+    const f = form.elements, withWho = f.outWith.value.trim();
+    if (!withWho) { toast("Add who has the piece."); return; }
+    const c = S.clients.find((x) => sameName(x.name, withWho));
+    S.outFormOpen = false;
+    await savePiece2({ ...p, out: { active: true, type: f.outType.value, with: withWho, clientId: c ? c.id : "", since: f.outSince.value || today(), due: f.outDue.value, notes: f.outNotes.value.trim() } });
+    toast("Marked as out");
+  }
+  async function returnIn() {
+    const p = S.pieces.find((x) => x.id === S.panel.id); if (!p || !isOut(p)) return;
+    const { active, ...o } = p.out;
+    await savePiece2({ ...p, out: { active: false }, outHistory: [...(p.outHistory || []), { ...o, returned: today() }] });
+    toast("Back in the gallery");
+  }
+
+  // ---------- quotes ----------
+  const isQuote = (inv) => inv.docType === "quote";
+  async function convertQuote(q) {
+    const now = new Date().toISOString(), id = "inv-" + uid();
+    const inv = { ...q, docType: "invoice", number: nextInvNumber("invoice"), date: today(), dueDate: addDays(today(), n(setting("dueDays"))), sent: false, received: [], voided: false, fromQuote: q.id, createdAt: now, updatedAt: now };
+    delete inv.id; delete inv.convertedTo; delete inv.sentDate; delete inv.sample;
+    if (!(await write("invoices/" + id, clean(inv)))) return;
+    const qd = { ...q, convertedTo: id, updatedAt: now }; delete qd.id;
+    await write("invoices/" + q.id, clean(qd), "Invoice created from quote");
+    S.panel = { type: "invoice", id, mode: "view", saved: Date.now() }; renderPanel();
+  }
+
+  // ---------- exports ----------
+  const csvCell = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  async function saveCsv(name, header, rows) {
+    if (!S.downloads) { toast("Downloads aren't available in this view."); return; }
+    try { await S.downloads.save({ filename: `${name}-${today()}.csv`, data: [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n") }); }
+    catch (e) { if (e && e.code !== "cancelled") toast("The export didn't save."); }
+  }
+  function exportInvoicesCsv() {
+    const rows = [...S.invoices].sort((a, b) => String(a.number).localeCompare(String(b.number))).map((i) => {
+      const t = invTotals(i);
+      return [i.number, isQuote(i) ? "Quote" : "Invoice", invStatus(i), i.date, i.dueDate, i.client?.name, i.client?.company, i.client?.email, (i.items || []).map((x) => x.title).join("; "),
+        t.sub, t.disc, t.ship, i.taxExempt ? "Exempt" : n(i.taxRate) + "%", t.tax, t.total, isQuote(i) ? "" : t.paid, isQuote(i) ? "" : t.balance, (i.received || []).map((r) => `${r.date} ${r.method} ${r.amount}`).join("; ")];
+    });
+    return saveCsv("twelve-objects-invoices", ["Number", "Type", "Status", "Date", "Due or valid until", "Client", "Company", "Email", "Pieces", "Subtotal", "Discount", "Shipping", "Tax rate", "Tax", "Total", "Paid", "Balance", "Payments"], rows);
+  }
+  function exportClientsCsv() {
+    const rows = S.clients.map((c) => { const st = clientStats(c); return [c.name, c.company, c.type, c.email, c.phone, c.address, c.instagram, c.metDate, c.source, c.interests, c.tradeDiscount, c.resaleCert, c.resaleExpiry, st.count, st.spent, st.paid, st.open, st.last, c.notes]; });
+    return saveCsv("twelve-objects-clients", ["Name", "Company", "Type", "Email", "Phone", "Address", "Instagram", "Met", "Source", "Interests", "Trade discount %", "Resale certificate", "Certificate expires", "Invoices", "Purchased", "Received", "Open balance", "Last invoice", "Notes"], rows);
+  }
+
+  // ---------- artist statements (PDF) ----------
+  // Shared letterhead for the gallery's documents.
+  function pdfDoc(title) {
+    const d = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
+    const K = { L: 54, R: 558, INK: [22, 22, 22], SOFT: [95, 95, 88], GREEN: [23, 137, 63], LIME: [221, 231, 138], LINE: [226, 226, 218] };
+    const txt = (s, x, y, o = {}) => { d.setFont(o.font || "helvetica", o.style || "normal"); d.setFontSize(o.size || 9.5); d.setTextColor(...(o.color || K.INK)); d.text(String(s), x, y, o.align ? { align: o.align } : undefined); };
+    const rule = (y, color = K.INK, w = 0.75, x1 = K.L) => { d.setDrawColor(...color); d.setLineWidth(w); d.line(x1, y, K.R, y); };
+    const masthead = () => { d.setCharSpace(5); txt("XIIO", K.L, 52, { size: 14 }); d.setCharSpace(0); txt("Twelve Objects", K.L + 72, 52, { font: "times", size: 11.5 }); txt("Collectible Design  ·  Art + Objects", K.R, 52, { size: 8, color: K.SOFT, align: "right" }); rule(62); };
+    const finish = () => {
+      const total = d.getNumberOfPages();
+      for (let i = 1; i <= total; i++) {
+        d.setPage(i); rule(742);
+        txt("XIIO, LLC dba Twelve Objects", K.L, 756, { size: 7.5 });
+        txt("8906 Olympic Blvd, Beverly Hills, CA 90211", K.L + 150, 756, { size: 7.5, color: K.SOFT });
+        const right = "cs@twelveobjects.com  ·  twelveobjects.com";
+        txt(total > 1 ? `${right}  ·  ${i} of ${total}` : right, K.R, 756, { size: 7.5, color: K.SOFT, align: "right" });
+      }
+      return d.output("blob");
+    };
+    masthead();
+    txt(title, K.L, 120, { font: "times", style: "italic", size: 34, color: K.GREEN });
+    const page = { y: 160 };
+    const room = (h) => { if (page.y + h > 720) { d.addPage(); masthead(); page.y = 90; } };
+    return { d, K, txt, rule, finish, page, room };
+  }
+  async function savePdf(name, blob) {
+    if (!S.downloads) { toast("Downloads aren't available in this view."); return; }
+    try { await S.downloads.save({ filename: name.replace(/[^A-Za-z0-9._-]+/g, "-"), data: blob }); }
+    catch (e) { if (e && e.code !== "cancelled") toast("The PDF didn't save."); }
+  }
+  const isPayout = (x) => x.auto === "payout" || /payout/i.test(x.label || "");
+
+  async function payoutPdf(p, pay) {
+    if (!window.jspdf) { toast("The PDF maker didn't load. Check your connection and try again."); return; }
+    const a = artistOf(p) || { name: artistName(p) };
+    const { d, K, txt, rule, finish, page } = pdfDoc("Payout statement");
+    const split = has(p.artistSplit) ? n(p.artistSplit) : 50, sale = n(p.salePrice), ship = n(p.shipping);
+    [["Statement date", fdate(today())], ["Piece", p.sku || ""], [pay.paid ? "Paid" : "Due", fdate(pay.paid ? pay.paidDate : pay.due)]].forEach(([k, v], i) => { txt(k.toUpperCase(), 400, 92 + i * 16, { size: 7, color: K.SOFT }); txt(v, K.R, 92 + i * 16, { align: "right" }); });
+    let y = page.y;
+    txt("ARTIST", K.L, y, { size: 7, color: K.SOFT }); txt("FROM", 320, y, { size: 7, color: K.SOFT });
+    [a.name, a.studio, a.email].filter(Boolean).forEach((s, i) => txt(s, K.L, y + 15 + i * 13, { style: i ? "normal" : "bold" }));
+    ["XIIO, LLC, doing business as Twelve Objects", "8906 Olympic Blvd, Beverly Hills, CA 90211", "cs@twelveobjects.com"].forEach((s, i) => txt(s, 320, y + 15 + i * 13, { color: i ? K.SOFT : K.INK }));
+    y += 70; rule(y);
+    txt(p.title || "Untitled", K.L, y + 22, { font: "times", size: 15 });
+    txt([p.year, p.materials, p.dimensions, p.edition].filter(Boolean).join(", "), K.L, y + 37, { size: 9, color: K.SOFT });
+    txt(`Sold ${fdate(p.soldDate)}${p.agreementDate ? ` · consignment agreement dated ${fdate(p.agreementDate)}` : ""}`, K.L, y + 50, { size: 9, color: K.SOFT });
+    y += 78;
+    const TX = 300, line = (k, v, o = {}) => { txt(k, TX, y, { color: o.strong ? K.INK : K.SOFT, style: o.strong ? "bold" : "normal" }); txt(v, K.R, y, { align: "right", style: o.strong ? "bold" : "normal" }); y += 18; };
+    line("Sale price", usd2(sale));
+    line("Less shipping", "-" + usd2(ship));
+    line("Net sale", usd2(Math.max(0, sale - ship)));
+    line(`Artist share (${split}%)`, usd2(calc(p).artistShare));
+    rule(y - 8, K.INK, 0.75, TX);
+    y += 6; d.setFillColor(...K.LIME); d.rect(TX - 6, y - 12, K.R - TX + 12, 20, "F");
+    line(pay.paid ? `Paid ${fdate(pay.paidDate)}` : `Amount due by ${fdate(pay.due)}`, usd2(pay.amount), { strong: true });
+    y += 20;
+    const note = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize("Per the consignment agreement, the artist receives the agreed share of the sale price net of shipping, paid within 30 days of the sale. Questions about this statement: cs@twelveobjects.com.", K.R - K.L);
+    rule(y, K.LINE, 0.5); d.setTextColor(...K.SOFT); d.text(note, K.L, y + 16);
+    await savePdf(`Payout_${p.sku || p.id}_${a.name}.pdf`, finish());
+  }
+
+  async function artistStatementPdf(a) {
+    if (!window.jspdf) { toast("The PDF maker didn't load. Check your connection and try again."); return; }
+    const { d, K, txt, rule, finish, page, room } = pdfDoc("Artist statement");
+    const ps = S.pieces.filter((p) => p.artistId === a.id);
+    const sold = ps.filter((p) => p.status === "Sold"), hand = ps.filter((p) => ON_HAND.includes(p.status));
+    const pays = ps.flatMap((p) => (p.payments || []).filter(isPayout));
+    const paid = pays.filter((x) => x.paid).reduce((s, x) => s + n(x.amount), 0), owed = pays.filter((x) => !x.paid).reduce((s, x) => s + n(x.amount), 0);
+    [["Statement date", fdate(today())], ["Pieces", String(ps.length)]].forEach(([k, v], i) => { txt(k.toUpperCase(), 400, 92 + i * 16, { size: 7, color: K.SOFT }); txt(v, K.R, 92 + i * 16, { align: "right" }); });
+    txt("ARTIST", K.L, page.y, { size: 7, color: K.SOFT });
+    [a.name, a.studio, a.location, a.email].filter(Boolean).forEach((s, i) => txt(s, K.L, page.y + 15 + i * 13, { style: i ? "normal" : "bold" }));
+    const sums = [["Paid to artist", usd2(paid)], ["Owed to artist", usd2(owed)], ["Sold", String(sold.length)], ["On hand", String(hand.length)]];
+    sums.forEach(([k, v], i) => { txt(k.toUpperCase(), 320 + (i % 2) * 120, page.y + (i > 1 ? 40 : 0), { size: 7, color: K.SOFT }); txt(v, 320 + (i % 2) * 120, page.y + 15 + (i > 1 ? 40 : 0), { font: "times", size: 14 }); });
+    page.y += 90;
+    const table = (title, cols, rows) => {
+      if (!rows.length) return;
+      room(60); rule(page.y); txt(title, K.L, page.y + 18, { font: "times", size: 14 }); page.y += 34;
+      cols.forEach(([h, x, al]) => txt(h.toUpperCase(), x, page.y, { size: 7, color: K.SOFT, align: al }));
+      page.y += 14;
+      rows.forEach((r) => { room(20); r.forEach((v, i) => txt(v, cols[i][1], page.y, { size: 9, align: cols[i][2] })); rule(page.y + 6, K.LINE, 0.5); page.y += 20; });
+      page.y += 12;
+    };
+    const clip = (s, w) => { const l = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize(String(s || ""), w); return l.length > 1 ? l[0].replace(/\s*\S*$/, "") + "..." : l[0] || ""; };
+    table("Sold", [["Piece", K.L], ["Sold", 230], ["Sale", 330, "right"], ["Shipping", 395, "right"], ["Share", 460, "right"], ["Payout", K.R, "right"]],
+      sold.map((p) => { const po = (p.payments || []).find(isPayout); return [clip(p.title, 170), fdate(p.soldDate), usd(p.salePrice), usd(p.shipping, { zero: 1 }), p.agreement === "Acquisition" ? "Acquired" : (has(p.artistSplit) ? n(p.artistSplit) : 50) + "%", po ? (po.paid ? "Paid " + fdate(po.paidDate) : "Due " + fdate(po.due)) : p.agreement === "Acquisition" ? "" : "Not set"]; }));
+    table("On hand", [["Piece", K.L], ["Agreement", 230], ["Received", 330], ["List price", 460, "right"], ["Consignment ends", K.R, "right"]],
+      hand.map((p) => [clip(p.title, 170), p.agreement || "Consignment", fdate(p.receivedDate), has(p.price) ? usd(p.price) : "", p.agreement === "Acquisition" ? "" : fdate(p.consignEnd)]));
+    await savePdf(`Statement_${a.name}_${today()}.pdf`, finish());
+  }
+
   // ---------- events ----------
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-open-invoice],[data-open-client],[data-inv-rm],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
+    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-open-invoice],[data-open-client],[data-inv-rm],[data-inv-tab],[data-statement],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
     if (!t) return;
     const d = t.dataset;
     if (d.go) { e.preventDefault(); S.view = d.go; closePanel(); render(); window.scrollTo(0, 0); return; }
     if (d.openPiece) { e.stopPropagation(); return openPanel("piece", d.openPiece); }
     if (d.openArtist) return openPanel("artist", d.openArtist);
+    if (d.invTab) { S.invTab = d.invTab; return render(); }
+    if (d.statement) { const [pid, pay] = d.statement.split("|"), p = S.pieces.find((x) => x.id === pid), x = p && (p.payments || []).find((y) => y.id === pay); if (x) { t.disabled = true; await payoutPdf(p, x); t.disabled = false; } return; }
     if (d.openClient) { e.stopPropagation(); return openPanel("client", d.openClient); }
     if (d.openInvoice) { e.stopPropagation(); S.invPayOpen = false; return openPanel("invoice", d.openInvoice); }
     if (d.invRm) { S.invDraft.splice(+d.invRm, 1); return rerenderInvForm(); }
@@ -1217,6 +1411,15 @@
       case "export": return exportCsv();
       case "new-invoice": S.invDraft = null; return openPanel("invoice", null, "edit");
       case "new-client": return openPanel("client", null, "edit");
+      case "new-quote": S.invDraft = null; S.confirmDelete = false; S.panel = { type: "invoice", id: null, mode: "edit", seed: { docType: "quote" } }; return renderPanel();
+      case "new-quote-client": { const c = S.clients.find((x) => x.id === d.client); if (!c) return; S.invDraft = null; S.confirmDelete = false; S.panel = { type: "invoice", id: null, mode: "edit", seed: { ...invoiceSeedFor(c), docType: "quote" } }; return renderPanel(); }
+      case "quote-convert": { const q = S.invoices.find((x) => x.id === S.panel.id); t.disabled = true; return convertQuote(q); }
+      case "export-invoices": return exportInvoicesCsv();
+      case "export-clients": return exportClientsCsv();
+      case "out-open": S.outFormOpen = true; return renderPanel();
+      case "out-cancel": S.outFormOpen = false; return renderPanel();
+      case "out-return": t.disabled = true; return returnIn();
+      case "artist-statement": { const a = S.artists.find((x) => x.id === S.panel.id); t.disabled = true; await artistStatementPdf(a); t.disabled = false; return; }
       case "new-invoice-client": { const c = S.clients.find((x) => x.id === d.client); if (!c) return; S.invDraft = null; S.confirmDelete = false; S.panel = { type: "invoice", id: null, mode: "edit", seed: invoiceSeedFor(c) }; return renderPanel(); }
       case "ask-delete-client": S.confirmDelete = true; return renderPanelKeep();
       case "keep-client": S.confirmDelete = false; return renderPanelKeep();
@@ -1225,7 +1428,7 @@
       case "inv-add-piece": { const v = $("#invAddPiece").value, p = S.pieces.find((x) => x.id === v); if (!p) { $("#formErr").textContent = "Choose a piece first."; return; } S.invDraft.push(itemFromPiece(p)); return rerenderInvForm(); }
       case "inv-settings": S.panel = { type: "settings", mode: "edit" }; return renderPanel();
       case "inv-pdf": { const inv = S.invoices.find((x) => x.id === S.panel.id); t.disabled = true; await invoicePdf(inv); t.disabled = false; return; }
-      case "inv-sent": { const inv = S.invoices.find((x) => x.id === S.panel.id); const nx = await invUpdate(inv, { sent: true, sentDate: today() }, "Marked as sent"); if (nx) await holdPieces(nx); return; }
+      case "inv-sent": { const inv = S.invoices.find((x) => x.id === S.panel.id); const nx = await invUpdate(inv, { sent: true, sentDate: today() }, "Marked as sent"); if (nx && !isQuote(nx)) await holdPieces(nx); return; }
       case "inv-pay-open": S.invPayOpen = true; return renderPanel();
       case "inv-pay-cancel": S.invPayOpen = false; return renderPanel();
       case "inv-paid-full": { const inv = S.invoices.find((x) => x.id === S.panel.id); t.disabled = true; return recordPayment(inv, invTotals(inv).balance, today(), "Wire"); }
@@ -1270,6 +1473,7 @@
     if (e.target.id === "invoiceForm") saveInvoice(e.target);
     if (e.target.id === "settingsForm") saveSettings(e.target);
     if (e.target.id === "clientForm") saveClient(e.target);
+    if (e.target.id === "outForm") sendOut(e.target);
     if (e.target.id === "invPayForm") { const f = e.target.elements; recordPayment(S.invoices.find((x) => x.id === S.panel.id), n(f.payAmount.value), f.payDate.value || today(), f.payMethod.value); }
   });
   document.addEventListener("change", (e) => {
