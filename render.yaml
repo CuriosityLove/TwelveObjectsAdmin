@@ -1,4 +1,4 @@
-# Render Blueprint: the app, its database, and the Monday email.
+# Render Blueprint: the app and its database.
 # In Render: New > Blueprint > pick this repository. Fill in the values marked sync: false.
 databases:
   - name: twelve-objects-db
@@ -35,31 +35,4 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
-        sync: false
-
-  - type: cron
-    name: twelve-objects-monday-email
-    runtime: node
-    region: oregon
-    plan: starter
-    # Render schedules in UTC: 15:00 UTC is 8am Pacific in summer, 7am in winter.
-    schedule: "0 15 * * 1"
-    buildCommand: npm ci --omit=dev
-    startCommand: node scripts/digest.js
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: twelve-objects-db
-          property: connectionString
-      - key: APP_URL
-        value: https://admin.twelveobjects.com
-      - key: DIGEST_TO
-        value: am@twelveobjects.com
-      - key: SMTP_HOST
-        value: smtp.gmail.com
-      - key: SMTP_PORT
-        value: "465"
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
         sync: false
