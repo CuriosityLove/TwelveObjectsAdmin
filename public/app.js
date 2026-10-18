@@ -11,7 +11,7 @@
 
   const S = {
     db: null, assets: null, downloads: null, canWrite: true,
-    pieces: [], artists: [], invoices: [], settings: {}, loaded: { pieces: false, artists: false, invoices: false }, offline: false,
+    pieces: [], artists: [], invoices: [], clients: [], settings: {}, loaded: { pieces: false, artists: false, invoices: false, clients: false }, offline: false, clientQ: "",
     invDraft: null, invPayOpen: false,
     view: "overview",
     f: { q: "", cat: "All", status: "On hand", agreement: "All", sort: "recent" },
@@ -96,6 +96,10 @@
       S.invoices = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() }));
       S.loaded.invoices = true; render(); renderPanel(true);
     }, () => {});
+    db.collection("clients").onSnapshot((snap) => {
+      S.clients = snap.docs.filter((d) => d.exists).map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      S.loaded.clients = true; render(); renderPanel(true);
+    }, () => {});
     db.collection("settings").onSnapshot((snap) => {
       const g = snap.docs.find((d) => d.id === "gallery" && d.exists); S.settings = g ? g.data() : {};
     }, () => {});
@@ -124,10 +128,10 @@
       m.innerHTML = `<div class="empty"><h2>Inventory <em class="s">offline</em></h2><div><p>The app can't reach the server right now. Check your connection and reload the page.</p></div></div>`;
       return;
     }
-    if (!S.loaded.pieces || !S.loaded.artists || !S.loaded.invoices) return;
-    const sampleCount = S.pieces.filter((p) => p.sample).length + S.artists.filter((a) => a.sample).length + S.invoices.filter((i) => i.sample).length;
-    const note = sampleCount && S.canWrite ? `<div class="notice"><span><b>Sample entries.</b> Pieces, artists and invoices marked Sample are examples to show how the inventory works.</span><button class="btn small ghost" data-act="clear-samples">Remove samples</button></div>` : "";
-    m.innerHTML = note + (S.view === "inventory" ? viewInventory() : S.view === "artists" ? viewArtists() : S.view === "invoices" ? viewInvoices() : viewOverview());
+    if (!S.loaded.pieces || !S.loaded.artists || !S.loaded.invoices || !S.loaded.clients) return;
+    const sampleCount = S.pieces.filter((p) => p.sample).length + S.artists.filter((a) => a.sample).length + S.invoices.filter((i) => i.sample).length + S.clients.filter((c) => c.sample).length;
+    const note = sampleCount && S.canWrite ? `<div class="notice"><span><b>Sample entries.</b> Pieces, artists, clients and invoices marked Sample are examples to show how the inventory works.</span><button class="btn small ghost" data-act="clear-samples">Remove samples</button></div>` : "";
+    m.innerHTML = note + (S.view === "inventory" ? viewInventory() : S.view === "artists" ? viewArtists() : S.view === "invoices" ? viewInvoices() : S.view === "clients" ? viewClients() : viewOverview());
   }
 
   function photoUrl(p, i = 0) { const ph = (p.photos || [])[i]; return ph ? "/_blob/" + ph : ""; }
@@ -327,6 +331,10 @@
       const inv = P.id ? S.invoices.find((x) => x.id === P.id) : null;
       if (P.id && !inv) { if (Date.now() - (P.saved || 0) > 5000) closePanel(); return; }
       html = P.mode === "edit" ? invoiceForm(inv || P.seed) : invoiceDetail(inv);
+    } else if (P.type === "client") {
+      const c = P.id ? S.clients.find((x) => x.id === P.id) : null;
+      if (P.id && !c) { if (Date.now() - (P.saved || 0) > 5000) closePanel(); return; }
+      html = P.mode === "edit" ? clientForm(c) : clientDetail(c);
     } else if (P.type === "settings") {
       html = settingsForm();
     } else {
@@ -633,6 +641,7 @@
       for (const p of ps) await S.db.doc("pieces/" + p.id).delete();
       for (const a of as) await S.db.doc("artists/" + a.id).delete();
       for (const i of S.invoices.filter((x) => x.sample)) await S.db.doc("invoices/" + i.id).delete();
+      for (const c of S.clients.filter((x) => x.sample)) await S.db.doc("clients/" + c.id).delete();
       toast("Samples removed");
     } catch (e) { toast("Couldn't remove the samples. Try again."); }
   }
@@ -743,6 +752,7 @@
     return `
       <div class="bar"><span class="k">${esc(inv.number)} · ${invPill(inv)}</span>
         <div class="acts">${can && st !== "Paid" ? `<button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small lime" data-act="inv-pdf">Download PDF</button><button class="btn small ghost" data-act="close">Close</button></div></div>
+      ${(() => { const cl = S.clients.find((x) => x.id === inv.clientId); return cl ? `<div class="by">For <button class="linkish" style="font-size:14px" data-open-client="${esc(cl.id)}">${esc(clientLabel(cl))}</button></div>` : ""; })()}
       ${invoiceDoc(inv)}
       ${can ? `<div class="iv-actions">
         ${st === "Draft" ? `<button class="btn small" data-act="inv-sent">Mark as sent</button>` : ""}
@@ -761,7 +771,6 @@
     inv = inv || {};
     if (!S.invDraft) S.invDraft = (inv.items || []).map((x) => ({ ...x }));
     const c = inv.client || {};
-    const clients = [...new Map(S.invoices.filter((i) => i.client?.name).map((i) => [i.client.name, i.client])).keys()];
     const busy = new Set(S.invoices.filter((i) => !i.voided && i.id !== inv.id).flatMap((i) => (i.items || []).map((x) => x.pieceId)));
     const avail = S.pieces.filter((p) => !["Sold", "Returned"].includes(p.status) && !busy.has(p.id) && !S.invDraft.some((x) => x.pieceId === p.id));
     return `
@@ -769,12 +778,13 @@
       <h2>${isNew ? "New <em class='s'>invoice</em>" : esc(inv.number)}</h2>
       <form id="invoiceForm" autocomplete="off" novalidate>
         <div class="sec"><span class="k">Client</span><div class="grid2">
-          ${field("clientName", "Name", c.name, { list: "clientList", req: true })}
+          ${field("clientId", "Saved client", inv.clientId || "", { full: true, options: [["", "New client, fill in below"], ...S.clients.map((x) => [x.id, clientLabel(x)])] })}
+          ${field("clientName", "Name", c.name, { req: true })}
           ${field("clientCompany", "Company", c.company)}
           ${field("clientEmail", "Email", c.email, { type: "email" })}
           ${field("clientPhone", "Phone", c.phone, { type: "tel" })}
           ${field("clientAddress", "Billing and delivery address", c.address, { type: "textarea", full: true })}
-        </div><datalist id="clientList">${clients.map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+        </div><div class="hint">New clients are saved to Clients when you save the invoice.</div></div>
 
         <div class="sec"><span class="k">Pieces</span>
           <div id="invItems">${invItemsHtml()}</div>
@@ -824,6 +834,7 @@
   function readInvForm(form) {
     const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
     return {
+      clientId: g("clientId"),
       client: { name: g("clientName"), company: g("clientCompany"), email: g("clientEmail"), phone: g("clientPhone"), address: g("clientAddress") },
       items: S.invDraft.map((x) => ({ ...x, price: n(x.price) })),
       discount: n(g("discount")), shipping: n(g("shipping")), taxRate: n(g("taxRate")),
@@ -848,6 +859,9 @@
     const data = readInvForm(form);
     if (!data.client.name) { $("#formErr").textContent = "Add the client's name."; $("#f-clientName").focus(); return; }
     if (!data.items.length) { $("#formErr").textContent = "Add at least one piece."; return; }
+    const btn0 = form.querySelector('[type="submit"]'); btn0.disabled = true;
+    data.clientId = await ensureClient(data);
+    btn0.disabled = false;
     const full = { ...(old || {}), ...data, updatedAt: new Date().toISOString() };
     delete full.id;
     if (!old) { full.createdAt = full.updatedAt; full.received = []; full.sent = false; }
@@ -1027,14 +1041,148 @@
     catch (e) { if (e && e.code !== "cancelled") toast("The PDF didn't save."); }
   }
 
+  // ---------- clients ----------
+  const CLIENT_TYPES = ["Collector", "Designer or trade", "Institution", "Other"];
+  const sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  const invoicesFor = (c) => S.invoices.filter((i) => i.clientId === c.id || (!i.clientId && sameName(i.client?.name, c.name)));
+  const clientLabel = (c) => c.company ? `${c.name}, ${c.company}` : c.name;
+  // Purchases count paid and partly paid invoices; voids and drafts don't.
+  function clientStats(c) {
+    const invs = invoicesFor(c).filter((i) => !i.voided);
+    const live = invs.filter((i) => ["Paid", "Partially paid", "Sent"].includes(invStatus(i)));
+    const bought = invs.filter((i) => invStatus(i) === "Paid");
+    return {
+      invs, count: invs.length,
+      spent: bought.reduce((s, i) => s + invTotals(i).total, 0),
+      paid: invs.reduce((s, i) => s + invTotals(i).paid, 0),
+      open: live.reduce((s, i) => s + (invStatus(i) === "Paid" ? 0 : invTotals(i).balance), 0),
+      pieces: bought.flatMap((i) => (i.items || []).map((x) => x.pieceId)).map((id) => S.pieces.find((p) => p.id === id)).filter(Boolean),
+      last: invs.map((i) => i.date).filter(Boolean).sort().pop() || "",
+    };
+  }
+
+  function viewClients() {
+    const q = (S.clientQ || "").trim().toLowerCase();
+    const list = S.clients.filter((c) => !q || [c.name, c.company, c.email, c.phone, c.address, c.type, c.interests].join(" ").toLowerCase().includes(q));
+    const tools = S.canWrite ? `<button class="btn" data-act="new-client">Add client</button>` : "";
+    if (!S.clients.length) return `<div class="head"><h1><em class="s">Clients</em></h1><div class="tools">${tools}</div></div><div class="empty-line">No clients yet. Add someone you've met, or they're saved automatically the first time you invoice them.</div>`;
+    const cards = list.map((c) => {
+      const st = clientStats(c);
+      return `<div class="artist">
+        <button style="border:0;background:none;padding:0;text-align:left" data-open-client="${esc(c.id)}"><div class="nm">${esc(c.name)}${sampleTag(c)}</div></button>
+        <div class="loc">${esc([c.company, c.type].filter(Boolean).join(" · ") || "Client")}</div>
+        <div class="stats"><span><b>${usd(st.spent, { zero: 1 })}</b> purchased</span><span><b>${st.count}</b> ${st.count === 1 ? "invoice" : "invoices"}</span>${st.open ? `<span style="color:var(--orange)"><b>${usd(st.open)}</b> open</span>` : ""}</div>
+        <div class="loc">${st.last ? "Last invoice " + fdate(st.last) : c.metDate ? "Met " + fdate(c.metDate) : esc(c.email || "")}</div>
+        <div class="ft"><button class="btn small ghost" data-open-client="${esc(c.id)}">Details</button>${S.canWrite ? `<button class="btn small lime" data-act="new-invoice-client" data-client="${esc(c.id)}">New invoice</button>` : ""}</div>
+      </div>`;
+    }).join("");
+    return `<div class="head"><h1><em class="s">Clients</em></h1><div class="tools">${tools}</div></div>
+      <div class="filters"><input class="search" id="clientQ" type="search" placeholder="Search name, company, email, interests" value="${esc(S.clientQ || "")}" aria-label="Search clients"></div>
+      ${list.length ? `<div class="artists">${cards}</div>` : `<div class="empty-line">No clients match that search.</div>`}`;
+  }
+
+  function clientDetail(c) {
+    const st = clientStats(c);
+    const facts = [["Type", c.type], ["Email", c.email], ["Phone", c.phone], ["Address", c.address], ["Instagram", c.instagram], ["Met", [fdate(c.metDate), c.source].filter(Boolean).join(", ")], ["Interests", c.interests],
+      ["Resale certificate", [c.resaleCert, c.resaleExpiry && "expires " + fdate(c.resaleExpiry)].filter(Boolean).join(", ")]].filter(([, v]) => has(v));
+    const rows = st.invs.sort((a, b) => String(b.date).localeCompare(String(a.date))).map((i) => `<tr class="click" data-open-invoice="${esc(i.id)}" tabindex="0"><td class="num">${esc(i.number)}</td><td class="num">${fdate(i.date)}</td><td>${(i.items || []).map((x) => esc(x.title)).join(", ")}</td><td class="r">${usd2(invTotals(i).total)}</td><td>${invPill(i)}</td></tr>`).join("");
+    return `
+      <div class="bar"><span class="k">Client</span><div class="acts">${S.canWrite ? `<button class="btn small lime" data-act="new-invoice-client" data-client="${esc(c.id)}">New invoice</button><button class="btn small" data-act="edit">Edit</button>` : ""}<button class="btn small ghost" data-act="close">Close</button></div></div>
+      <h2>${esc(c.name)}${sampleTag(c)}</h2>
+      <div class="by">${esc([c.company, c.type].filter(Boolean).join(" · "))}</div>
+      <div class="sec"><div class="money" style="grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--rule)">
+        <div><span class="k">Purchased</span><div class="v">${usd(st.spent, { zero: 1 })}</div><div class="sub">paid invoices, with tax and shipping</div></div>
+        <div><span class="k">Received</span><div class="v">${usd(st.paid, { zero: 1 })}</div><div class="sub">all payments to date</div></div>
+        <div><span class="k">Open balance</span><div class="v" style="${st.open ? "color:var(--orange)" : ""}">${usd(st.open, { zero: 1 })}</div><div class="sub">on sent invoices</div></div>
+      </div></div>
+      <div class="sec"><span class="k">Details</span><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd style="white-space:pre-line">${esc(v)}</dd>`).join("") || "<dt>Details</dt><dd>Not recorded yet</dd>"}</dl></div>
+      ${c.notes ? `<div class="sec"><span class="k">Notes</span><div class="notes">${esc(c.notes)}</div></div>` : ""}
+      <div class="sec"><span class="k">Invoices (${st.invs.length})</span>${rows ? `<div class="tbl-wrap" style="border-top:0"><table class="tbl" style="min-width:520px"><tbody>${rows}</tbody></table></div>` : `<div class="empty-line">No invoices yet.</div>`}</div>
+      <div class="sec"><span class="k">Pieces bought (${st.pieces.length})</span>${st.pieces.length ? `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px 14px;margin-top:14px">${st.pieces.map(card).join("")}</div>` : `<div class="empty-line">Nothing bought yet.</div>`}</div>`;
+  }
+
+  function clientForm(c) {
+    const isNew = !c; c = c || { type: "Collector" };
+    return `
+      <div class="bar"><span class="k">${isNew ? "New client" : "Editing client"}</span><div class="acts"><button class="btn small ghost" data-act="${isNew ? "close" : "cancel-edit"}">Cancel</button></div></div>
+      <h2>${isNew ? "Add a <em class='s'>client</em>" : esc(c.name)}</h2>
+      <form id="clientForm" autocomplete="off" novalidate>
+        <div class="sec"><span class="k">Who</span><div class="grid2">
+          ${field("name", "Name", c.name, { req: true })}
+          ${field("company", "Company or studio", c.company)}
+          ${field("type", "Type", c.type, { options: CLIENT_TYPES })}
+          ${field("instagram", "Instagram", c.instagram, { ph: "@handle" })}
+        </div></div>
+        <div class="sec"><span class="k">Contact</span><div class="grid2">
+          ${field("email", "Email", c.email, { type: "email" })}
+          ${field("phone", "Phone", c.phone, { type: "tel" })}
+          ${field("address", "Billing and delivery address", c.address, { type: "textarea", full: true })}
+        </div></div>
+        <div class="sec"><span class="k">How we met</span><div class="grid2">
+          ${field("metDate", "Date met", c.metDate, { type: "date" })}
+          ${field("source", "Where or through whom", c.source, { ph: "Gallery visit, Design Miami, referral from..." })}
+          ${field("interests", "Interests", c.interests, { full: true, ph: "Artists, categories, sizes, budget" })}
+        </div></div>
+        <div class="sec"><span class="k">Trade and tax</span><div class="grid2">
+          ${field("resaleCert", "Resale certificate number", c.resaleCert)}
+          ${field("resaleExpiry", "Certificate expires", c.resaleExpiry, { type: "date" })}
+        </div><div class="hint">With a resale certificate on file, new invoices for this client start as tax exempt.</div></div>
+        <div class="sec"><span class="k">Notes</span><div class="grid2">${field("notes", "Notes", c.notes, { type: "textarea", full: true })}</div></div>
+        <div class="form-acts">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${isNew ? "" : S.confirmDelete ? `<span class="err">Delete this client? Their invoices stay.</span><button type="button" class="btn small danger" data-act="delete-client">Delete</button><button type="button" class="btn small ghost" data-act="keep-client">Keep</button>` : `<button type="button" class="btn small danger" data-act="ask-delete-client">Delete client</button>`}</div>
+          <div style="display:flex;gap:8px;align-items:center"><span class="err" id="formErr"></span><button type="submit" class="btn">${isNew ? "Add client" : "Save changes"}</button></div>
+        </div>
+      </form>`;
+  }
+
+  async function saveClient(form) {
+    const P = S.panel, old = P.id ? S.clients.find((x) => x.id === P.id) : null;
+    const fd = new FormData(form), g = (k) => String(fd.get(k) ?? "").trim();
+    if (!g("name")) { $("#formErr").textContent = "Add a name to save."; return; }
+    const data = { ...(old || {}) };
+    for (const k of ["name", "company", "type", "instagram", "email", "phone", "address", "metDate", "source", "interests", "resaleCert", "resaleExpiry", "notes"]) data[k] = g(k);
+    delete data.id; data.updatedAt = new Date().toISOString(); if (!old) data.createdAt = data.updatedAt;
+    const id = P.id || "cl-" + uid();
+    if (await write("clients/" + id, data, old ? "Saved" : "Client added")) { S.panel = { type: "client", id, mode: "view", saved: Date.now() }; renderPanel(); }
+  }
+
+  // What a new invoice starts with for a saved client.
+  function invoiceSeedFor(c) {
+    const exempt = !!c.resaleCert && !(c.resaleExpiry && c.resaleExpiry < today());
+    return { clientId: c.id, client: { name: c.name, company: c.company, email: c.email, phone: c.phone, address: c.address }, taxExempt: exempt, taxNote: exempt ? "Resale certificate " + c.resaleCert : "" };
+  }
+  function fillInvoiceClient(c) {
+    const f = $("#invoiceForm"); if (!f) return;
+    const s = invoiceSeedFor(c), el = f.elements;
+    el.clientId.value = c.id;
+    el.clientName.value = c.name || ""; el.clientCompany.value = c.company || ""; el.clientEmail.value = c.email || ""; el.clientPhone.value = c.phone || ""; el.clientAddress.value = c.address || "";
+    if (s.taxExempt) { el.taxExempt.checked = true; el.taxNote.value = s.taxNote; }
+    refreshInvLive();
+  }
+  // An invoice always ends up tied to a client record: the chosen one, one with the same name, or a new one.
+  async function ensureClient(data) {
+    if (data.clientId && S.clients.some((c) => c.id === data.clientId)) {
+      const c = S.clients.find((x) => x.id === data.clientId), cl = data.client, patch = {};
+      for (const k of ["company", "email", "phone", "address"]) if (cl[k] && !c[k]) patch[k] = cl[k];
+      if (Object.keys(patch).length) { const d = { ...c, ...patch }; delete d.id; await write("clients/" + c.id, d); }
+      return c.id;
+    }
+    const match = S.clients.find((c) => sameName(c.name, data.client.name));
+    if (match) return match.id;
+    const id = "cl-" + uid(), now = new Date().toISOString();
+    await write("clients/" + id, { ...data.client, type: "Collector", createdAt: now, updatedAt: now });
+    return id;
+  }
+
   // ---------- events ----------
   document.addEventListener("click", async (e) => {
-    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-open-invoice],[data-inv-rm],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
+    const t = e.target.closest("[data-go],[data-act],[data-open-piece],[data-open-artist],[data-open-invoice],[data-open-client],[data-inv-rm],[data-cat],[data-layout],[data-mark-paid],[data-follow-done],[data-photo],[data-rm-photo]");
     if (!t) return;
     const d = t.dataset;
     if (d.go) { e.preventDefault(); S.view = d.go; closePanel(); render(); window.scrollTo(0, 0); return; }
     if (d.openPiece) { e.stopPropagation(); return openPanel("piece", d.openPiece); }
     if (d.openArtist) return openPanel("artist", d.openArtist);
+    if (d.openClient) { e.stopPropagation(); return openPanel("client", d.openClient); }
     if (d.openInvoice) { e.stopPropagation(); S.invPayOpen = false; return openPanel("invoice", d.openInvoice); }
     if (d.invRm) { S.invDraft.splice(+d.invRm, 1); return rerenderInvForm(); }
     if (d.cat) { S.f.cat = d.cat; return render(); }
@@ -1068,6 +1216,11 @@
       }
       case "export": return exportCsv();
       case "new-invoice": S.invDraft = null; return openPanel("invoice", null, "edit");
+      case "new-client": return openPanel("client", null, "edit");
+      case "new-invoice-client": { const c = S.clients.find((x) => x.id === d.client); if (!c) return; S.invDraft = null; S.confirmDelete = false; S.panel = { type: "invoice", id: null, mode: "edit", seed: invoiceSeedFor(c) }; return renderPanel(); }
+      case "ask-delete-client": S.confirmDelete = true; return renderPanelKeep();
+      case "keep-client": S.confirmDelete = false; return renderPanelKeep();
+      case "delete-client": try { await S.db.doc("clients/" + S.panel.id).delete(); toast("Client deleted"); closePanel(); } catch (x) { toast("Couldn't delete. Try again."); } return;
       case "new-invoice-for": { const p = S.pieces.find((x) => x.id === d.piece); S.invDraft = p ? [itemFromPiece(p)] : null; S.panel = { type: "invoice", id: null, mode: "edit" }; S.confirmDelete = false; return renderPanel(); }
       case "inv-add-piece": { const v = $("#invAddPiece").value, p = S.pieces.find((x) => x.id === v); if (!p) { $("#formErr").textContent = "Choose a piece first."; return; } S.invDraft.push(itemFromPiece(p)); return rerenderInvForm(); }
       case "inv-settings": S.panel = { type: "settings", mode: "edit" }; return renderPanel();
@@ -1083,6 +1236,11 @@
       case "clear-samples": t.disabled = true; return clearSamples();
     }
   });
+  function renderPanelKeep() {
+    // rebuild only the delete area so typed values stay
+    const area = $("#clientForm .form-acts > div"); if (!area) return renderPanel();
+    area.innerHTML = S.confirmDelete ? `<span class="err">Delete this client? Their invoices stay.</span><button type="button" class="btn small danger" data-act="delete-client">Delete</button><button type="button" class="btn small ghost" data-act="keep-client">Keep</button>` : `<button type="button" class="btn small danger" data-act="ask-delete-client">Delete client</button>`;
+  }
   function rerenderInvForm() {
     // keep typed values while the item list or delete prompt changes
     const f = $("#invoiceForm"); if (!f) return;
@@ -1111,6 +1269,7 @@
     if (e.target.id === "artistForm") saveArtist(e.target);
     if (e.target.id === "invoiceForm") saveInvoice(e.target);
     if (e.target.id === "settingsForm") saveSettings(e.target);
+    if (e.target.id === "clientForm") saveClient(e.target);
     if (e.target.id === "invPayForm") { const f = e.target.elements; recordPayment(S.invoices.find((x) => x.id === S.panel.id), n(f.payAmount.value), f.payDate.value || today(), f.payMethod.value); }
   });
   document.addEventListener("change", (e) => {
@@ -1119,7 +1278,8 @@
     if (t.id === "fAgreement") { S.f.agreement = t.value; render(); }
     if (t.id === "fSort") { S.f.sort = t.value; render(); }
     if (t.closest && t.closest("#invoiceForm")) refreshInvLive();
-    if (t.id === "f-clientName") { const prev = S.invoices.find((i) => i.client?.name === t.value); if (prev) { const f = $("#invoiceForm").elements; for (const [k, v] of [["clientCompany", "company"], ["clientEmail", "email"], ["clientPhone", "phone"], ["clientAddress", "address"]]) if (!f[k].value) f[k].value = prev.client[v] || ""; } }
+    if (t.id === "f-clientId" && t.value) { const c = S.clients.find((x) => x.id === t.value); if (c) fillInvoiceClient(c); }
+    if (t.id === "f-clientName" && $("#invoiceForm") && !$("#f-clientId").value) { const c = S.clients.find((x) => sameName(x.name, t.value)); if (c) fillInvoiceClient(c); }
     if (t.id === "photoInput") uploadPhotos([...t.files]);
     if (t.id === "f-artistId") { $("#newArtistWrap").hidden = t.value !== "__new"; if (t.value !== "__new") { const a = S.artists.find((x) => x.id === t.value); if (a && (a.agreement === "Consignment" || a.agreement === "Acquisition") && $("#pieceForm") && !S.panel.id) $("#f-agreement").value = a.agreement; } }
     if (t.name === "pp") { const h = t.closest(".pay-row").querySelector('[name="ppd"]'); h.value = t.checked ? today() : ""; }
@@ -1128,13 +1288,17 @@
   document.addEventListener("input", (e) => {
     if (e.target.dataset && e.target.dataset.invPrice !== undefined) S.invDraft[+e.target.dataset.invPrice].price = n(e.target.value);
     if (e.target.closest && e.target.closest("#invoiceForm")) refreshInvLive();
+    if (e.target.id === "clientQ") {
+      clearTimeout(qt);
+      qt = setTimeout(() => { S.clientQ = e.target.value; const pos = e.target.selectionStart; render(); const q = $("#clientQ"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }, 160);
+    }
     if (e.target.id === "q") {
       clearTimeout(qt);
       qt = setTimeout(() => { S.f.q = e.target.value; const pos = e.target.selectionStart; render(); const q = $("#q"); if (q) { q.focus(); q.setSelectionRange(pos, pos); } }, 160);
     }
   });
 
-  if (/^#(inventory|artists|invoices|overview)$/.test(location.hash)) S.view = location.hash.slice(1);
+  if (/^#(inventory|artists|clients|invoices|overview)$/.test(location.hash)) S.view = location.hash.slice(1);
   render();
   boot();
 })();

@@ -218,7 +218,8 @@
     }
    ],
    "notes": "Thank you for collecting with Twelve Objects.",
-   "createdAt": "2026-09-28T10:00:00Z"
+   "createdAt": "2026-09-28T10:00:00Z",
+   "clientId": "cl-sample1"
   },
   {
    "id": "inv-sample2",
@@ -255,7 +256,64 @@
    "depositPct": 50,
    "received": [],
    "notes": "",
-   "createdAt": "2026-10-15T10:00:00Z"
+   "createdAt": "2026-10-15T10:00:00Z",
+   "clientId": "cl-sample2"
+  }
+ ],
+ "clients": [
+  {
+   "id": "cl-sample1",
+   "sample": true,
+   "name": "Jordan Rivera (sample)",
+   "company": "",
+   "type": "Collector",
+   "email": "jordan@example.com",
+   "phone": "",
+   "address": "1200 Example Drive\nLos Angeles, CA 90049",
+   "instagram": "",
+   "metDate": "2026-09-20",
+   "source": "Gallery visit",
+   "interests": "Lighting, blown glass, Example Studio North",
+   "resaleCert": "",
+   "resaleExpiry": "",
+   "notes": "Sample client. Prefers delivery on weekends.",
+   "createdAt": "2026-09-20T10:00:00Z"
+  },
+  {
+   "id": "cl-sample2",
+   "sample": true,
+   "name": "Alex Chen (sample)",
+   "company": "Sample Interiors Studio",
+   "type": "Designer or trade",
+   "email": "alex@example.com",
+   "phone": "310.555.0100",
+   "address": "500 Sample Blvd, Suite 2\nSanta Monica, CA 90401",
+   "instagram": "@sampleinteriors",
+   "metDate": "2026-10-03",
+   "source": "Referral from a collector",
+   "interests": "Large stone tables, sculptural seating for a Malibu residence",
+   "resaleCert": "SR-000-000000",
+   "resaleExpiry": "2027-12-31",
+   "notes": "Sample client. Trade pricing discussed.",
+   "createdAt": "2026-10-03T10:00:00Z"
+  },
+  {
+   "id": "cl-sample3",
+   "sample": true,
+   "name": "Morgan Ellis (sample)",
+   "company": "",
+   "type": "Collector",
+   "email": "morgan@example.com",
+   "phone": "",
+   "address": "",
+   "instagram": "",
+   "metDate": "2026-10-16",
+   "source": "Opening reception",
+   "interests": "Ceramics, ash glazes",
+   "resaleCert": "",
+   "resaleExpiry": "",
+   "notes": "Sample client met before any invoice. Follow up about the vessel pair.",
+   "createdAt": "2026-10-16T10:00:00Z"
   }
  ]
 }

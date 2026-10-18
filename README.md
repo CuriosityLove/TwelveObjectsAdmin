@@ -1,11 +1,11 @@
 # Twelve Objects Inventory
 
-The gallery's private inventory and invoicing at **admin.twelveobjects.com**: pieces, artists, agreement terms, invoices, payments owed, follow-ups, photos and files links. Sign-in is limited to @twelveobjects.com Google accounts. It installs on a phone as an app.
+The gallery's private inventory and invoicing at **admin.twelveobjects.com**: pieces, artists, clients, agreement terms, invoices, payments owed, follow-ups, photos and files links. Sign-in is limited to @twelveobjects.com Google accounts. It installs on a phone as an app.
 
 ## How it is built
 
 - `server.js`: Node and Express. Serves the app and a small API, and pushes live updates to open pages.
-- `lib/db.js`: Postgres. Pieces, artists, invoices and settings are stored as JSON records, and photos are stored in the database too.
+- `lib/db.js`: Postgres. Pieces, artists, clients, invoices and settings are stored as JSON records, and photos are stored in the database too.
 - Invoices: built from pieces in the inventory, downloaded as branded PDFs (jsPDF, served from `node_modules`). Marking an invoice sent puts its pieces on hold; paying it in full marks them sold and schedules consignment payouts 30 days out. The default sales tax rate is in Invoice settings.
 - `lib/auth.js`: Google sign-in with a signed session cookie. Only `ALLOWED_DOMAIN` accounts, plus anyone listed in `ALLOWED_EMAILS`, get in.
 - `public/`: the inventory screens (`index.html`, `app.js`), the connection layer (`shim.js`), the sign-in page, and the phone install files.
