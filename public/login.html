@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Sign in · Twelve Objects</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500&family=Playfair+Display:ital@0;1&display=swap">
+<style>
+:root { --bg: #fff; --ink: #161616; --soft: #5f5f58; --green: #17893f; --lime: #dde78a; --red: #d81b37; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #11120f; --ink: #ecece4; --soft: #a9a99e; --green: #8ed39b; --lime: #4a5221; --red: #ff8a98; color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 "Inter Tight", "Helvetica Neue", Arial, sans-serif; display: flex; flex-direction: column;
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+.top { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--ink); padding-bottom: 12px; }
+.x { font-weight: 300; letter-spacing: 0.32em; font-size: 20px; }
+.n { font-family: "Playfair Display", Georgia, serif; font-size: 15px; }
+main { flex: 1; display: grid; place-content: center; gap: 22px; max-width: 460px; margin: 0 auto; }
+h1 { font-family: "Playfair Display", Georgia, serif; font-weight: 400; font-size: clamp(34px, 7vw, 48px); line-height: 1.05; margin: 0; color: var(--green); }
+h1 em { font-style: italic; }
+p { margin: 0; color: var(--soft); }
+a.btn { display: inline-flex; justify-content: center; border: 1px solid var(--ink); background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px; text-decoration: none; font-weight: 500; }
+.err { background: var(--lime); color: var(--ink); padding: 8px 12px; border-radius: 3px; }
+footer { border-top: 1px solid var(--ink); padding-top: 10px; font-size: 11.5px; color: var(--soft); }
+</style>
+</head>
+<body>
+<div class="top"><span class="x">XIIO</span><span class="n">Twelve Objects <em>Inventory</em></span></div>
+<main>
+  <h1>The <em>collection,</em><br>behind the scenes.</h1>
+  <p>Sign in with your @twelveobjects.com Google account.</p>
+  <p class="err" id="err" hidden></p>
+  <a class="btn" href="/auth/google">Sign in with Google</a>
+</main>
+<footer>XIIO, LLC, doing business as Twelve Objects · 8906 Olympic Blvd, Beverly Hills, CA 90211</footer>
+<script src="/login.js"></script>
+</body>
+</html>
