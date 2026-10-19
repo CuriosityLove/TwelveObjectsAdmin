@@ -9,7 +9,15 @@ const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif
 
 async function main() {
   const pool = db.makePool();
-  await db.migrate(pool);
+  // On a fresh deploy the database can still be starting; wait for it rather than exit.
+  for (let i = 1; ; i++) {
+    try { await db.migrate(pool); break; }
+    catch (e) {
+      if (i >= 20 || !["ECONNREFUSED", "ENOTFOUND", "57P03"].includes(e.code)) throw e;
+      console.log(`Database not ready (${e.code}), retrying in 3s`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
   await importIfEmpty(pool);
 
   const app = express();
