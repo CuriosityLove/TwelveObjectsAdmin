@@ -741,7 +741,7 @@
     const t = invTotals(inv), c = inv.client || {};
     const line = (k, v, cls = "") => `<div class="iv-row ${cls}"><span>${k}</span><span class="num">${v}</span></div>`;
     return `<div class="iv-doc">
-      <div class="iv-top"><span class="x">XIIO</span><span class="serif">Twelve Objects</span></div>
+      <div class="iv-top">${LOGO}<span class="serif">Twelve Objects</span></div>
       <div class="iv-head"><h3><em class="s">${isQuote(inv) ? "Quote" : "Invoice"}</em></h3><dl><dt>No.</dt><dd>${esc(inv.number)}</dd><dt>Date</dt><dd>${fdate(inv.date)}</dd><dt>${isQuote(inv) ? "Valid until" : "Due"}</dt><dd>${fdate(inv.dueDate)}</dd></dl></div>
       <div class="iv-parties"><div><span class="k">Billed to</span>${[c.name, c.company, ...(c.address || "").split("\n"), c.email, c.phone].filter(Boolean).map((x) => `<div>${esc(x)}</div>`).join("") || "<div>Client not set</div>"}</div>
         <div><span class="k">From</span><div>XIIO, LLC, doing business as Twelve Objects</div><div>8906 Olympic Blvd</div><div>Beverly Hills, CA 90211</div><div>cs@twelveobjects.com · 424.279.5683</div></div></div>
@@ -974,6 +974,18 @@
     } catch (e) { return null; }
   }
 
+  // The XIIO mark, from the gallery's logo file. LOGO is for screens; pdfLogo draws the same shapes in a PDF.
+  const LOGO = `<svg class="logo" viewBox="0 17.2 545.4 154.2" role="img" aria-label="XIIO"><polygon points=".45 163.69 65.86 96.03 0 27.93 6.3 21.18 72.38 89.52 142.43 17.21 148.73 23.95 78.67 96.03 144.31 163.69 138.01 170.43 72.38 102.78 6.74 170.43 .45 163.69"/><rect x="217.99" y="19.76" width="9.45" height="149.1"/><rect x="308.59" y="19.76" width="9.46" height="149.1"/><path d="M467.54,171.42c-43.92,0-78.39-34.27-78.39-77.01s34.47-77.21,78.39-77.21,77.8,32.7,77.8,77.8c0,42.55-35.25,76.43-77.8,76.43M467.54,26.06c-38.21,0-68.54,28.56-68.54,67.56,0,36.83,29.74,69.13,67.17,69.13,39.39,0,69.33-29.35,69.33-67.96s-30.73-68.74-67.95-68.74"/></svg>`;
+  function pdfLogo(d, x, top, h, rgb = [22, 22, 22]) {
+    const k = h / 154.2, P = (px, py) => [x + px * k, top + (py - 17.2) * k];
+    d.setFillColor(...rgb); d.setDrawColor(...rgb);
+    const pts = [[0.45, 163.69], [65.86, 96.03], [0, 27.93], [6.3, 21.18], [72.38, 89.52], [142.43, 17.21], [148.73, 23.95], [78.67, 96.03], [144.31, 163.69], [138.01, 170.43], [72.38, 102.78], [6.74, 170.43]].map(([a, b]) => P(a, b));
+    d.lines(pts.slice(1).map((p, i) => [p[0] - pts[i][0], p[1] - pts[i][1]]), pts[0][0], pts[0][1], [1, 1], "F", true);
+    d.rect(...P(217.99, 19.76), 9.45 * k, 149.1 * k, "F");
+    d.rect(...P(308.59, 19.76), 9.46 * k, 149.1 * k, "F");
+    d.setLineWidth(9.5 * k); d.circle(...P(467.35, 94.3), 73.2 * k, "S");
+    return 545.4 * k;
+  }
   async function invoicePdf(inv) {
     if (!window.jspdf) { toast("The PDF maker didn't load. Check your connection and try again."); return; }
     const d = new window.jspdf.jsPDF({ unit: "pt", format: "letter" });
@@ -982,8 +994,8 @@
     const txt = (s, x, y, o = {}) => { d.setFont(o.font || "helvetica", o.style || "normal"); d.setFontSize(o.size || 9.5); d.setTextColor(...(o.color || INK)); d.text(String(s), x, y, o.align ? { align: o.align } : undefined); };
     const rule = (y, color = INK, w = 0.75) => { d.setDrawColor(...color); d.setLineWidth(w); d.line(L, y, R, y); };
     const masthead = () => {
-      d.setCharSpace(5); txt("XIIO", L, 52, { size: 14 }); d.setCharSpace(0);
-      txt("Twelve Objects", L + 72, 52, { font: "times", size: 11.5 });
+      const lw = pdfLogo(d, L, 42.5, 9.5);
+      txt("Twelve Objects", L + lw + 14, 52, { font: "times", size: 11.5 });
       txt("Collectible Design  ·  Art + Objects", R, 52, { size: 8, color: SOFT, align: "right" });
       rule(62);
     };
@@ -1283,7 +1295,7 @@
     const K = { L: 54, R: 558, INK: [22, 22, 22], SOFT: [95, 95, 88], GREEN: [23, 137, 63], LIME: [221, 231, 138], LINE: [226, 226, 218] };
     const txt = (s, x, y, o = {}) => { d.setFont(o.font || "helvetica", o.style || "normal"); d.setFontSize(o.size || 9.5); d.setTextColor(...(o.color || K.INK)); d.text(String(s), x, y, o.align ? { align: o.align } : undefined); };
     const rule = (y, color = K.INK, w = 0.75, x1 = K.L) => { d.setDrawColor(...color); d.setLineWidth(w); d.line(x1, y, K.R, y); };
-    const masthead = () => { d.setCharSpace(5); txt("XIIO", K.L, 52, { size: 14 }); d.setCharSpace(0); txt("Twelve Objects", K.L + 72, 52, { font: "times", size: 11.5 }); txt("Collectible Design  ·  Art + Objects", K.R, 52, { size: 8, color: K.SOFT, align: "right" }); rule(62); };
+    const masthead = () => { const lw = pdfLogo(d, K.L, 42.5, 9.5); txt("Twelve Objects", K.L + lw + 14, 52, { font: "times", size: 11.5 }); txt("Collectible Design  ·  Art + Objects", K.R, 52, { size: 8, color: K.SOFT, align: "right" }); rule(62); };
     const finish = () => {
       const total = d.getNumberOfPages();
       for (let i = 1; i <= total; i++) {

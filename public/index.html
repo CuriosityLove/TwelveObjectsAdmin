@@ -82,8 +82,9 @@ em.s { font-family: var(--serif); font-style: italic; font-weight: 400; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
 .mast { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); }
 .mast .wrap { display: flex; align-items: center; gap: 24px; padding-block: 16px 12px; flex-wrap: wrap; }
-.mark { display: flex; align-items: baseline; gap: 14px; text-decoration: none; color: var(--ink); }
-.mark .x { font-family: var(--sans); font-weight: 300; letter-spacing: 0.32em; font-size: 20px; }
+.mark { display: flex; align-items: center; gap: 14px; text-decoration: none; color: var(--ink); }
+.logo { display: block; width: auto; fill: currentColor; flex: none; }
+.mark .logo { height: 14px; }
 .mark .n { font-family: var(--serif); font-size: 15px; }
 .mark .n em { font-style: italic; }
 nav.tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
@@ -282,8 +283,8 @@ label.f textarea { min-height: 84px; resize: vertical; }
 
 /* ---------- invoices ---------- */
 .iv-doc { border: 1px solid var(--line); background: var(--surface); padding: 22px 24px 18px; display: grid; gap: 18px; }
-.iv-top { display: flex; gap: 12px; align-items: baseline; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
-.iv-top .x { font-weight: 300; letter-spacing: 0.32em; }
+.iv-top { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+.iv-top .logo { height: 11px; }
 .iv-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
 .iv-head h3 { margin: 0; font-size: 38px; line-height: 1; color: var(--green); font-weight: 400; }
 .iv-head dl { display: grid; grid-template-columns: auto auto; gap: 2px 14px; margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -356,7 +357,7 @@ footer .wrap { padding-block: 0 28px; }
 <header class="mast">
   <div class="wrap">
     <a class="mark" href="#overview" data-go="overview" aria-label="Twelve Objects inventory home">
-      <span class="x">XIIO</span><span class="n">Twelve Objects <em>Inventory</em></span>
+      <svg class="logo" viewBox="0 17.2 545.4 154.2" role="img" aria-label="XIIO"><polygon points=".45 163.69 65.86 96.03 0 27.93 6.3 21.18 72.38 89.52 142.43 17.21 148.73 23.95 78.67 96.03 144.31 163.69 138.01 170.43 72.38 102.78 6.74 170.43 .45 163.69"/><rect x="217.99" y="19.76" width="9.45" height="149.1"/><rect x="308.59" y="19.76" width="9.46" height="149.1"/><path d="M467.54,171.42c-43.92,0-78.39-34.27-78.39-77.01s34.47-77.21,78.39-77.21,77.8,32.7,77.8,77.8c0,42.55-35.25,76.43-77.8,76.43M467.54,26.06c-38.21,0-68.54,28.56-68.54,67.56,0,36.83,29.74,69.13,67.17,69.13,39.39,0,69.33-29.35,69.33-67.96s-30.73-68.74-67.95-68.74"/></svg><span class="n">Twelve Objects <em>Inventory</em></span>
     </a>
     <nav class="tabs" aria-label="Sections">
       <button type="button" data-go="overview">Overview</button>
