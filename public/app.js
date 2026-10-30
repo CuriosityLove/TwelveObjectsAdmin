@@ -117,7 +117,7 @@
     catch (e) {
       if (e && e.code === "invalid_argument") { S.canWrite = false; toast("You can view this inventory but not change it. Check that you are signed in."); }
       else if (e && e.code === "quota_exceeded") toast("Storage is full. Remove old pieces before adding more.");
-      else toast("That change did not save. Check your connection and try again.");
+      else toast("That change did not save. " + (e && e.message && e.message !== e.code ? e.message + "." : "Check your connection and try again."));
       return false;
     }
   }
@@ -656,7 +656,7 @@
       for (const i of S.invoices.filter((x) => x.sample)) await S.db.doc("invoices/" + i.id).delete();
       for (const c of S.clients.filter((x) => x.sample)) await S.db.doc("clients/" + c.id).delete();
       toast("Samples removed");
-    } catch (e) { toast("Couldn't remove the samples. Try again."); }
+    } catch (e) { toast("Couldn't remove the samples. " + (e && e.message ? e.message + "." : "Try again.")); }
   }
 
   // ---------- invoices ----------

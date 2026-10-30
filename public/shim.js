@@ -5,11 +5,21 @@
   const err = (code, message) => Object.assign(new Error(message || code), { code });
 
   async function call(method, url, body, headers = {}) {
-    const r = await fetch(url, { method, body, headers: { ...H, ...headers }, credentials: "same-origin" });
-    if (r.status === 401) { location.href = "/login"; throw err("revoked"); }
+    let r;
+    try { r = await fetch(url, { method, body, headers: { ...H, ...headers }, credentials: "same-origin" }); }
+    catch (e) { throw err("unavailable", "No connection to the server"); }
+    if (r.status === 401) {
+      // A read can go straight to sign-in; a save keeps the open form so nothing typed is lost.
+      if (method === "GET") location.href = "/login";
+      throw err("unavailable", "Your sign-in expired. Open the app in a new tab to sign in again, then save here");
+    }
     if (r.status === 415) throw err("unsupported_type");
-    if (r.status === 400 || r.status === 403) throw err("invalid_argument");
-    if (!r.ok) throw err("unavailable");
+    if (r.status === 413) throw err("unavailable", "That is too large to save");
+    if (!r.ok) {
+      let why = ""; try { why = (await r.json()).error || ""; } catch (e) {}
+      if (r.status >= 500) throw err("unavailable", `The server couldn't save it just now (${r.status}). Try again in a moment`);
+      throw err("unavailable", `The server refused the save (${r.status}${why ? ", " + why : ""})`);
+    }
     return r.json();
   }
 

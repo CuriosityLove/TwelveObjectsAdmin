@@ -35,7 +35,10 @@ async function main() {
   });
 
   const pub = path.join(__dirname, "public");
-  app.get("/healthz", (req, res) => res.send("ok"));
+  // Render restarts the app if this fails, so it checks the database too.
+  app.get("/healthz", async (req, res) => {
+    try { await pool.query("select 1"); res.send("ok"); } catch (e) { res.status(503).send("database unavailable"); }
+  });
   // Files the sign-in page and the phone install need before anyone is signed in.
   for (const f of ["login.html", "login.js", "manifest.webmanifest", "sw.js"]) app.get("/" + f, (req, res) => res.sendFile(path.join(pub, f)));
   app.use("/icons", express.static(path.join(pub, "icons"), { maxAge: "7d" }));
@@ -57,11 +60,24 @@ async function main() {
   });
 
   // Writes must come from the app's own scripts.
-  const sameOrigin = (req, res, next) => (req.get("X-Requested-With") === "twelve-objects" ? next() : res.status(403).json({ error: "forbidden" }));
+  const sameOrigin = (req, res, next) => {
+    if (req.get("X-Requested-With") === "twelve-objects") return next();
+    console.warn("refused write without app header:", req.method, req.path);
+    res.status(403).json({ error: "forbidden" });
+  };
   const validCol = (req, res, next) => (db.COLLECTIONS.has(req.params.col) ? next() : res.status(404).json({ error: "not_found" }));
   const validId = (req, res, next) => (db.ID_RE.test(req.params.id) ? next() : res.status(400).json({ error: "bad_id" }));
 
   app.get("/api/me", (req, res) => res.json(req.user));
+  // Everything except photos, as one JSON file, for keeping a copy outside Render.
+  app.get("/api/backup", async (req, res, next) => {
+    try {
+      const out = { exportedAt: new Date().toISOString(), exportedBy: req.user.email };
+      for (const col of db.COLLECTIONS) out[col] = await db.list(pool, col);
+      const day = out.exportedAt.slice(0, 10);
+      res.set({ "Content-Disposition": `attachment; filename="twelve-objects-backup-${day}.json"`, "Cache-Control": "no-store" }).json(out);
+    } catch (e) { next(e); }
+  });
   app.get("/api/:col", validCol, async (req, res, next) => {
     try { res.set("Cache-Control", "no-store").json(await db.list(pool, req.params.col)); } catch (e) { next(e); }
   });
@@ -101,7 +117,11 @@ async function main() {
 
   app.get("/vendor/jspdf.umd.min.js", (req, res) => res.sendFile(require.resolve("jspdf/dist/jspdf.umd.min.js")));
   app.use(express.static(pub, { index: "index.html", maxAge: 0 }));
-  app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: "server_error" }); });
+  app.use((err, req, res, next) => {
+    if (err.type === "entity.too.large") return res.status(413).json({ error: "too_large" });
+    console.error(req.method, req.path, err);
+    res.status(500).json({ error: "server_error" });
+  });
 
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log(`Twelve Objects admin on :${port}`));
