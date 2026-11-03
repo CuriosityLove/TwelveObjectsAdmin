@@ -419,13 +419,16 @@
     const type = opts.type || "text", cls = opts.full ? " full" : "";
     if (opts.options) return `<label class="f${cls}">${label}<select id="f-${name}" name="${name}">${opts.options.map((o) => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}"${String(val ?? "") === String(v) ? " selected" : ""}>${esc(l)}</option>`; }).join("")}</select></label>`;
     if (type === "textarea") return `<label class="f${cls}">${label}<textarea id="f-${name}" name="${name}" placeholder="${esc(opts.ph || "")}">${esc(val)}</textarea></label>`;
-    return `<label class="f${cls}">${label}<input id="f-${name}" name="${name}" type="${type}" value="${esc(val)}"${opts.ph ? ` placeholder="${esc(opts.ph)}"` : ""}${opts.list ? ` list="${opts.list}"` : ""}${type === "number" ? ' step="any" inputmode="decimal"' : ""}${opts.req ? " required" : ""}></label>`;
+    // Amounts use a text box with the number keypad: a browser number box (Safari, Firefox) quietly empties
+    // anything typed as "5,500" or "$5,500", which used to erase the price on save.
+    const inType = type === "number" ? "text" : type;
+    return `<label class="f${cls}">${label}<input id="f-${name}" name="${name}" type="${inType}" value="${esc(val)}"${opts.ph ? ` placeholder="${esc(opts.ph)}"` : ""}${opts.list ? ` list="${opts.list}"` : ""}${type === "number" ? ' inputmode="decimal" data-num' : ""}${opts.req ? " required" : ""}></label>`;
   }
 
   function payRow(x = {}) {
     return `<div class="pay-row" data-pay="${esc(x.id || uid())}">
       <label class="f">What<input name="pl" value="${esc(x.label || "")}" placeholder="Artist payout"></label>
-      <label class="f">Amount<input name="pa" type="number" step="any" inputmode="decimal" value="${esc(x.amount ?? "")}"></label>
+      <label class="f">Amount<input name="pa" type="text" inputmode="decimal" data-num value="${esc(x.amount ?? "")}"></label>
       <label class="f">Due<input name="pd" type="date" value="${esc(x.due || "")}"></label>
       <label class="chk"><input type="checkbox" name="pp"${x.paid ? " checked" : ""}> Paid</label>
       <input type="hidden" name="ppd" value="${esc(x.paidDate || "")}">
@@ -580,6 +583,8 @@
       if (!(await write("artists/" + artistId, { name: nm, agreement: g("agreement"), createdAt: new Date().toISOString() }))) return;
     }
     const numOrNull = (k) => (g(k) === "" ? null : n(g(k)));
+    const badNum = [...form.querySelectorAll("[data-num]")].find((el) => el.value.trim() !== "" && !/\d/.test(el.value));
+    if (badNum) { $("#formErr").textContent = "Enter a number here, like 5500 or $5,500."; badNum.focus(); return; }
     const payments = [...form.querySelectorAll("[data-pay]")].map((row) => {
       const v = (s) => row.querySelector(`[name="${s}"]`);
       const paid = v("pp").checked;
@@ -851,7 +856,7 @@
   function invItemsHtml() {
     if (!S.invDraft.length) return `<div class="empty-line" style="padding:12px 0">No pieces yet. Add one below.</div>`;
     return S.invDraft.map((x, k) => `<div class="iv-edit-row"><div style="min-width:0"><div class="serif" style="font-size:15px">${esc(x.title)}</div><div class="iv-sm">${esc(x.artist)}${x.sku ? " · " + esc(x.sku) : ""}</div></div>
-      <label class="f">Price<input type="number" step="any" inputmode="decimal" data-inv-price="${k}" value="${esc(x.price)}"></label>
+      <label class="f">Price<input type="text" inputmode="decimal" data-num data-inv-price="${k}" value="${esc(x.price)}"></label>
       <button type="button" class="x" data-inv-rm="${k}" aria-label="Remove ${esc(x.title)}">×</button></div>`).join("");
   }
   function readInvForm(form) {
