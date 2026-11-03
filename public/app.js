@@ -54,19 +54,33 @@
   }
 
   // ---------- money logic ----------
-  // Consignment: artist share = (sale - shipping) x split. Acquisition: gallery owns it; margin = sale - cost.
+  // Shipping to the gallery (shipIn) is paid by one of three parties:
+  //   "Gallery"                  our cost: part of landed cost; on consignment it comes off the sale before the split
+  //   "Artist, repaid from sale" (50/50 agreement) comes off the sale first and is paid back to the artist with their share
+  //   "Artist, in their share"   (60/40 agreement) nothing is deducted or repaid
+  // shipping = delivery to the collector that the collector didn't pay; it always comes off the sale.
+  const SHIP_BY = ["Gallery", "Artist, repaid from sale", "Artist, in their share"];
+  const shipBy = (p) => p.shipInPaidBy || (p.agreement === "Acquisition" ? "Gallery" : "Artist, repaid from sale");
+  const landed = (p) => n(p.cost) + (shipBy(p) === "Gallery" ? n(p.shipIn) : 0);
+  // Consignment: share = (sale - deductions) x split, plus any shipping refund. Acquisition: margin = sale - delivery - landed cost.
   function calc(p) {
-    const sale = n(p.salePrice), ship = n(p.shipping), split = has(p.artistSplit) ? n(p.artistSplit) : 50;
-    const out = { artistShare: 0, galleryNet: 0 };
+    const sale = n(p.salePrice), ship = n(p.shipping), split = has(p.artistSplit) ? n(p.artistSplit) : 50, by = shipBy(p);
+    const shipIn = by === "Artist, in their share" ? 0 : n(p.shipIn);
+    const out = { artistShare: 0, splitShare: 0, refund: 0, galleryNet: 0, net: 0, shipInDeducted: 0, landed: landed(p) };
+    if (!has(p.salePrice)) return out;
     if (p.agreement === "Acquisition") {
-      out.galleryNet = has(p.salePrice) ? sale - n(p.cost) : 0;
+      out.galleryNet = sale - ship - out.landed;
     } else {
-      const base = Math.max(0, sale - ship);
-      out.artistShare = has(p.salePrice) ? Math.round(base * split / 100) : 0;
-      out.galleryNet = has(p.salePrice) ? sale - out.artistShare - ship : 0;
+      out.shipInDeducted = shipIn;
+      out.net = Math.max(0, sale - ship - shipIn);
+      out.splitShare = Math.round(out.net * split / 100);
+      out.refund = by === "Artist, repaid from sale" ? shipIn : 0;
+      out.artistShare = out.splitShare + out.refund; // what the artist is paid
+      out.galleryNet = sale - ship - shipIn - out.splitShare;
     }
     return out;
   }
+  const payoutLabel = (p, c) => `Artist payout, ${has(p.artistSplit) ? n(p.artistSplit) : 50}% of net${c.refund ? " + shipping refund" : ""}`;
   const unpaid = (p) => (p.payments || []).filter((x) => !x.paid);
 
   function upcoming() {
@@ -371,8 +385,8 @@
       ["Condition notes", p.conditionNotes],
     ].filter(([k, v]) => k && has(v));
     const terms = cons
-      ? `Consignment. Artist receives <mark>${split}%</mark> of the sale price net of shipping, paid within <mark>30 days</mark> of sale. Artist ships in; gallery covers return shipping.${p.consignEnd ? ` Consignment runs to <mark>${fdate(p.consignEnd)}</mark>.` : ""}`
-      : `Acquisition. Purchased outright for <mark>${has(p.cost) ? usd(p.cost) : "an unrecorded amount"}</mark>. The gallery sets the resale price and owes the artist nothing further after payment.`;
+      ? `Consignment. Artist receives <mark>${split}%</mark> of net proceeds, paid within <mark>30 days</mark> of sale. ${{ "Gallery": "We paid shipping to the gallery; it comes off the sale before the split.", "Artist, repaid from sale": "Artist paid shipping to the gallery; it comes off the sale first and is repaid to the artist.", "Artist, in their share": "Artist paid shipping to the gallery; it is covered by their share and not repaid." }[shipBy(p)]} Gallery covers return shipping.${p.consignEnd ? ` Consignment runs to <mark>${fdate(p.consignEnd)}</mark>.` : ""}`
+      : `Acquisition. Purchased outright for <mark>${has(p.cost) ? usd(p.cost) : "an unrecorded amount"}</mark>${has(p.shipIn) && shipBy(p) === "Gallery" ? `, plus <mark>${usd(p.shipIn)}</mark> shipping, for a landed cost of <mark>${usd(landed(p))}</mark>` : ""}. The gallery sets the resale price and owes the artist nothing further after payment.`;
     const pays = (p.payments || []).slice().sort((x, y) => String(x.due).localeCompare(String(y.due)));
     const payRows = pays.length ? `<table class="pays">${pays.map((x) => `<tr>
         <td>${esc(x.label || "Payment")}</td>
@@ -399,10 +413,10 @@
         <div class="terms">${terms}</div>
         <div class="files-link"><div style="min-width:0"><div>${p.agreementDate ? "Signed " + fdate(p.agreementDate) : `<span style="color:var(--orange)">Signed agreement not recorded</span>`}</div>${p.agreementUrl ? `<div class="u">${esc(p.agreementUrl)}</div>` : ""}</div>${p.agreementUrl ? `<a class="btn small lime" href="${esc(safeUrl(p.agreementUrl))}" target="_blank" rel="noopener">Open agreement</a>` : ""}</div>
         <div class="money">
-          <div><span class="k">${cons ? "Paid" : "Paid"}</span><div class="v">${cons ? (has(p.cost) ? usd(p.cost) : "$0") : money(p.cost)}</div><div class="sub">${cons ? "consigned, nothing upfront" : "acquisition cost"}</div></div>
+          <div><span class="k">Landed cost</span><div class="v">${cons && !has(p.cost) && !(has(p.shipIn) && shipBy(p) === "Gallery") ? "$0" : usd(landed(p), { zero: 1 })}</div><div class="sub">${has(p.shipIn) ? usd(p.shipIn) + " shipping in, " + (shipBy(p) === "Gallery" ? "paid by us" : shipBy(p) === "Artist, repaid from sale" ? "artist paid, repaid on sale" : "artist paid") : cons ? "consigned, nothing upfront" : "purchase plus shipping in"}</div></div>
           <div><span class="k">List price</span><div class="v">${money(p.price)}</div><div class="sub">retail</div></div>
-          <div><span class="k">Sold for</span><div class="v">${money(p.salePrice)}</div><div class="sub">${has(p.shipping) ? usd(p.shipping) + " shipping" : "shipping not set"}</div></div>
-          <div><span class="k">${cons ? "Artist share" : "Gallery margin"}</span><div class="v">${has(p.salePrice) ? usd(cons ? c.artistShare : c.galleryNet, { zero: 1 }) : "<span style='color:var(--faint)'>After sale</span>"}</div><div class="sub">${cons ? (has(p.salePrice) ? "gallery keeps " + usd(c.galleryNet, { zero: 1 }) : split + "% net of shipping") : "sale minus cost"}</div></div>
+          <div><span class="k">Sold for</span><div class="v">${money(p.salePrice)}</div><div class="sub">${has(p.shipping) ? usd(p.shipping) + " delivery to collector" : "no delivery cost"}</div></div>
+          <div><span class="k">${cons ? "Artist share" : "Gallery margin"}</span><div class="v">${has(p.salePrice) ? usd(cons ? c.artistShare : c.galleryNet, { zero: 1 }) : "<span style='color:var(--faint)'>After sale</span>"}</div><div class="sub">${cons ? (has(p.salePrice) ? (c.refund ? `incl. ${usd(c.refund)} shipping refund, ` : "") + "gallery keeps " + usd(c.galleryNet, { zero: 1 }) : split + "% of net proceeds") : "sale minus landed cost"}</div></div>
         </div>
       </div>
       <div class="sec"><span class="k">Payments</span>${payRows}</div>
@@ -472,15 +486,17 @@
           ${field("agreement", "Agreement", p.agreement, { options: ["Consignment", "Acquisition"] })}
           ${field("artistSplit", "Artist share %", p.artistSplit ?? 50, { type: "number" })}
           ${field("cost", "Amount we paid", p.cost, { type: "number", ph: "Acquisition cost" })}
+          ${field("shipIn", "Shipping to gallery", p.shipIn, { type: "number", ph: "Inbound shipping cost" })}
+          ${field("shipInPaidBy", "Shipping to gallery paid by", shipBy(p), { options: SHIP_BY })}
           ${field("price", "List price", p.price, { type: "number" })}
           ${field("salePrice", "Sold for", p.salePrice, { type: "number" })}
-          ${field("shipping", "Shipping on sale", p.shipping, { type: "number" })}
+          ${field("shipping", "Delivery to collector (our cost)", p.shipping, { type: "number" })}
           ${field("soldDate", "Date sold", p.soldDate, { type: "date" })}
           ${field("buyer", "Buyer", p.buyer, { full: false })}
           ${field("agreementDate", "Agreement signed", p.agreementDate, { type: "date" })}
           ${field("agreementUrl", "Signed agreement link (PDF)", p.agreementUrl, { ph: "https://www.dropbox.com/..." })}
           ${field("consignEnd", "Consignment ends", p.consignEnd, { type: "date" })}
-        </div><div class="hint">Consignment pays the artist their share of the sale net of shipping within 30 days. Acquisition is paid upfront; record that payment below.</div></div>
+        </div><div class="hint">Landed cost is what we paid plus shipping to the gallery when we paid it. On consignment, shipping to the gallery comes off the sale before the split unless it's in the artist's share (60/40), and is repaid to the artist when they paid it (50/50). Acquisitions are paid 50% upfront and 50% six months after receipt; record both below.</div></div>
 
         <div class="sec"><span class="k">Care and insurance</span><div class="grid3">
           ${field("insuranceValue", "Insured value", p.insuranceValue, { type: "number" })}
@@ -594,7 +610,7 @@
       ...(old || {}),
       title: g("title"), artistId, category: g("category"), status: g("status"), sku: g("sku"), year: g("year"), edition: g("edition"),
       materials: g("materials"), dimensions: g("dimensions"), location: g("location"),
-      agreement: g("agreement"), artistSplit: numOrNull("artistSplit"), cost: numOrNull("cost"), price: numOrNull("price"),
+      agreement: g("agreement"), artistSplit: numOrNull("artistSplit"), cost: numOrNull("cost"), shipIn: numOrNull("shipIn"), shipInPaidBy: g("shipInPaidBy"), price: numOrNull("price"),
       salePrice: numOrNull("salePrice"), shipping: numOrNull("shipping"), soldDate: g("soldDate"), buyer: g("buyer"),
       receivedDate: g("receivedDate"), expectedDate: g("expectedDate"), followUpDate: g("followUpDate"), followUpNote: g("followUpNote"),
       followUpDone: old && old.followUpDate === g("followUpDate") ? !!old.followUpDone : false,
@@ -646,9 +662,9 @@
   }
 
   async function exportCsv() {
-    const cols = ["sku", "title", "artist", "category", "status", "agreement", "artistSplit", "cost", "price", "salePrice", "shipping", "soldDate", "materials", "dimensions", "year", "edition", "receivedDate", "agreementDate", "agreementUrl", "insuranceValue", "condition", "conditionNotes", "owed", "nextDate", "filesUrl"];
+    const cols = ["sku", "title", "artist", "category", "status", "agreement", "artistSplit", "cost", "shipIn", "shipInPaidBy", "landedCost", "price", "salePrice", "shipping", "soldDate", "materials", "dimensions", "year", "edition", "receivedDate", "agreementDate", "agreementUrl", "insuranceValue", "condition", "conditionNotes", "owed", "nextDate", "filesUrl"];
     const q = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const rows = filtered().map((p) => cols.map((c) => q(c === "artist" ? artistName(p) : c === "owed" ? unpaid(p).reduce((s, x) => s + n(x.amount), 0) : c === "nextDate" ? nextDate(p) : p[c])).join(","));
+    const rows = filtered().map((p) => cols.map((c) => q(c === "artist" ? artistName(p) : c === "owed" ? unpaid(p).reduce((s, x) => s + n(x.amount), 0) : c === "nextDate" ? nextDate(p) : c === "landedCost" ? landed(p) : c === "shipInPaidBy" ? (has(p.shipIn) ? shipBy(p) : "") : p[c])).join(","));
     try { await S.downloads.save({ filename: `twelve-objects-inventory-${today()}.csv`, data: [cols.join(","), ...rows].join("\n") }); }
     catch (e) { if (e && e.code !== "cancelled") toast("The export didn't save."); }
   }
@@ -925,8 +941,8 @@
       const sale = cents(n(x.price) - (t.sub ? t.disc * n(x.price) / t.sub : 0));
       const next = { ...p, status: "Sold", salePrice: sale, soldDate, buyer: inv.client?.company || inv.client?.name || "", invoiceId: inv.id, holdInvoice: "" };
       if (next.agreement !== "Acquisition" && !(next.payments || []).some((y) => y.auto === "payout")) {
-        const split = has(next.artistSplit) ? n(next.artistSplit) : 50;
-        next.payments = [...(next.payments || []), { id: uid(), auto: "payout", label: `Artist payout, ${split}% of sale`, amount: calc(next).artistShare, due: addDays(soldDate, 30), paid: false, paidDate: "" }];
+        const c = calc(next);
+        next.payments = [...(next.payments || []), { id: uid(), auto: "payout", label: payoutLabel(next, c), amount: c.artistShare, due: addDays(soldDate, 30), paid: false, paidDate: "" }];
       }
       await savePiece2(next);
     }
@@ -1341,15 +1357,18 @@
     txt(`Sold ${fdate(p.soldDate)}${p.agreementDate ? ` · consignment agreement dated ${fdate(p.agreementDate)}` : ""}`, K.L, y + 50, { size: 9, color: K.SOFT });
     y += 78;
     const TX = 300, line = (k, v, o = {}) => { txt(k, TX, y, { color: o.strong ? K.INK : K.SOFT, style: o.strong ? "bold" : "normal" }); txt(v, K.R, y, { align: "right", style: o.strong ? "bold" : "normal" }); y += 18; };
+    const c = calc(p);
     line("Sale price", usd2(sale));
-    line("Less shipping", "-" + usd2(ship));
-    line("Net sale", usd2(Math.max(0, sale - ship)));
-    line(`Artist share (${split}%)`, usd2(calc(p).artistShare));
+    if (ship) line("Less delivery to collector", "-" + usd2(ship));
+    if (c.shipInDeducted) line("Less shipping to gallery", "-" + usd2(c.shipInDeducted));
+    line("Net proceeds", usd2(c.net));
+    line(`Artist share (${split}%)`, usd2(c.splitShare));
+    if (c.refund) line("Plus shipping refund", usd2(c.refund));
     rule(y - 8, K.INK, 0.75, TX);
     y += 6; d.setFillColor(...K.LIME); d.rect(TX - 6, y - 12, K.R - TX + 12, 20, "F");
     line(pay.paid ? `Paid ${fdate(pay.paidDate)}` : `Amount due by ${fdate(pay.due)}`, usd2(pay.amount), { strong: true });
     y += 20;
-    const note = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize("Per the consignment agreement, the artist receives the agreed share of the sale price net of shipping, paid within 30 days of the sale. Questions about this statement: cs@twelveobjects.com.", K.R - K.L);
+    const note = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize("Per the consignment agreement, the artist receives the agreed share of net proceeds, plus any shipping to the gallery they paid that is repaid on sale, within 30 days of the sale. Questions about this statement: cs@twelveobjects.com.", K.R - K.L);
     rule(y, K.LINE, 0.5); d.setTextColor(...K.SOFT); d.text(note, K.L, y + 16);
     await savePdf(`Payout_${p.sku || p.id}_${a.name}.pdf`, finish());
   }
@@ -1377,7 +1396,7 @@
     };
     const clip = (s, w) => { const l = d.setFont("helvetica", "normal").setFontSize(9).splitTextToSize(String(s || ""), w); return l.length > 1 ? l[0].replace(/\s*\S*$/, "") + "..." : l[0] || ""; };
     table("Sold", [["Piece", K.L], ["Sold", 230], ["Sale", 330, "right"], ["Shipping", 395, "right"], ["Share", 460, "right"], ["Payout", K.R, "right"]],
-      sold.map((p) => { const po = (p.payments || []).find(isPayout); return [clip(p.title, 170), fdate(p.soldDate), usd(p.salePrice), usd(p.shipping, { zero: 1 }), p.agreement === "Acquisition" ? "Acquired" : (has(p.artistSplit) ? n(p.artistSplit) : 50) + "%", po ? (po.paid ? "Paid " + fdate(po.paidDate) : "Due " + fdate(po.due)) : p.agreement === "Acquisition" ? "" : "Not set"]; }));
+      sold.map((p) => { const po = (p.payments || []).find(isPayout); return [clip(p.title, 170), fdate(p.soldDate), usd(p.salePrice), usd(n(p.shipping) + calc(p).shipInDeducted, { zero: 1 }), p.agreement === "Acquisition" ? "Acquired" : (has(p.artistSplit) ? n(p.artistSplit) : 50) + "%", po ? (po.paid ? "Paid " + fdate(po.paidDate) : "Due " + fdate(po.due)) : p.agreement === "Acquisition" ? "" : "Not set"]; }));
     table("On hand", [["Piece", K.L], ["Agreement", 230], ["Received", 330], ["List price", 460, "right"], ["Consignment ends", K.R, "right"]],
       hand.map((p) => [clip(p.title, 170), p.agreement || "Consignment", fdate(p.receivedDate), has(p.price) ? usd(p.price) : "", p.agreement === "Acquisition" ? "" : fdate(p.consignEnd)]));
     await savePdf(`Statement_${a.name}_${today()}.pdf`, finish());
@@ -1420,9 +1439,9 @@
         if (!v("salePrice")) { $("#formErr").textContent = "Enter what it sold for first."; return; }
         const acq = v("agreement") === "Acquisition";
         if (acq) { $("#formErr").textContent = "Acquisitions owe the artist nothing after sale."; return; }
-        const amt = calc({ agreement: "Consignment", salePrice: v("salePrice"), shipping: v("shipping"), artistSplit: v("artistSplit") }).artistShare;
-        const sold = v("soldDate") || today();
-        $("#payRows").insertAdjacentHTML("beforeend", payRow({ label: "Artist payout, " + (v("artistSplit") || 50) + "% of sale", amount: amt, due: addDays(sold, 30) }));
+        const q = { agreement: "Consignment", salePrice: v("salePrice"), shipping: v("shipping"), artistSplit: v("artistSplit") === "" ? null : n(v("artistSplit")), shipIn: v("shipIn"), shipInPaidBy: v("shipInPaidBy") };
+        const c = calc(q), sold = v("soldDate") || today();
+        $("#payRows").insertAdjacentHTML("beforeend", payRow({ label: payoutLabel(q, c), amount: c.artistShare, due: addDays(sold, 30) }));
         $("#formErr").textContent = ""; return;
       }
       case "export": return exportCsv();
